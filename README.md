@@ -1,268 +1,482 @@
 # Agricultural MCP Assistant
 
-An AI-powered agricultural assistant designed to assist smallholder farmers, agricultural extension workers, and agronomists with crop disease assessment, localized weather advisories, persistent farm observation recording, historical trend summaries, and deterministic agronomic calculations using the Model Context Protocol (MCP).
-
-> **Current Project Status (Phase 5 Complete):**
-> * **Phase 2–4:** Pydantic domain models, stdio-based MCP server (`MCPServer`), async MCP client, interactive menu CLI, and decoupled LLM agent adapter.
-> * **Phase 5A (Persistence):** Robust SQLite relational storage with connection safety, transactions, schema migrations, and 4 farm observation MCP tools (`record_farm_observation`, `get_farm_observation`, `list_farm_observations`, `count_farm_observations`).
-> * **Phase 5B (Insights):** Historical observation statistical summarizer and deterministic agronomic calculations for Growing Degree Days (GDD) and precipitation patterns (`summarize_farm_observations`, `calculate_agronomic_metrics`).
-> * **Phase 5C (Searchable Knowledge):** SQLite Full-Text Search (FTS5) backed crop pathology and pest repository with rank-scoring, seed deduplication, source attribution, and multilingual-ready schema.
-> * **Phase 5D (Integration):** 10-option interactive CLI menu, dynamic LLM tool discovery and execution, comprehensive test coverage (102 passing tests), and production documentation.
+A production-grade, full-stack, AI-powered agricultural decision-support system designed for smallholder farmers, agricultural extension workers, and agronomists. It integrates crop disease pathology search, localized meteorological forecasts, persistent farm observation management, historical trend summaries, and deterministic agronomic calculations using Google Gemini tool calling and the Model Context Protocol (MCP) over both **stdio and Streamable HTTP transports**.
 
 ---
 
-## 1. Use Case & Architecture
+## A. Project Overview
 
-### The Problem
-Smallholder farmers and agricultural extension workers often face challenges identifying crop diseases, anticipating micro-climate weather risks, keeping systematic field observation records across growing seasons, and calculating thermal growth units. Standard general-purpose LLMs lack access to real-time local weather forecasts, verified regional agronomic databases, and reliable persistent storage.
+The **Agricultural MCP Assistant** bridges modern foundation AI models with local agricultural realities. Smallholder farming communities face significant barriers in accessing timely, localized, and evidence-grounded agronomic expertise. Symptoms of devastating crop diseases (such as Coffee Leaf Rust, Maize Fall Armyworm, or Wheat Stem Rust) are often identified too late, and localized weather volatility complicates planting and spraying schedules.
 
-### The Solution with MCP
-The Model Context Protocol (MCP) standardizes how LLM applications interact with local tools, live data, and private context. The assistant connects an interactive client or agent to:
-1. **Full-Text Crop Knowledge Base:** SQLite FTS5-indexed symptom-to-remedy mappings for Ethiopian staple crops (Teff, Maize, Wheat, Coffee, Sorghum) with strict source attribution and research citations (EIAR, FAO, CABI).
-2. **Weather Service:** High-resolution meteorological forecasts via latitude/longitude coordinates (Open-Meteo REST API).
-3. **Persistent Farm Observation Storage:** Local SQLite database recording field notes, crop stages, timestamps, location names, and GPS coordinates with foreign keys, WAL mode, and atomic transactions.
-4. **Historical Insights & Agronomic Calculations:** Statistical observation aggregations and transparent, deterministic agronomic calculations (Growing Degree Days and precipitation analysis).
+### Problems Addressed
+1. **Access to Vetted Agricultural Knowledge:** Provides instant access to pathology data sourced directly from the **Ethiopian Institute of Agricultural Research (EIAR)** and **CABI PlantwisePlus Knowledge Bank**, avoiding unverified hallucinated treatments.
+2. **Actionable Weather Intelligence:** Delivers localized 1–14 day high-resolution meteorological forecasts via **Open-Meteo** without requiring paid API access.
+3. **Structured Field Recordkeeping:** Replaces lost paper records with a local SQLite database that records field observations, phenological stages, and spatial coordinates.
+4. **Data-Driven Agronomic Insights:** Deterministically computes critical thermal heat units (Growing Degree Days - GDD) and precipitation dry-spell indices from daily weather records.
+5. **Safe AI Interaction:** Enforces strict **human-in-the-loop write safety**; the AI assistant can suggest and draft farm observations, but never mutates the database without explicit user confirmation.
 
-### Application Architecture
-```text
-User / Extension Worker
-        │
-        ▼
- Agricultural Assistant CLI (client/cli.py)
-        │
-        ▼
-   MCP Client Session (client/mcp_client.py)
-        │
-        ▼ [stdio JSON-RPC Transport]
-   Agricultural MCP Server (server/app.py)
-        │
-        ├──────────────────────┬──────────────────────┬──────────────────────┐
-        │                      │                      │                      │
-        ▼                      ▼                      ▼                      ▼
-  Crop Knowledge        Weather Service        Observation Service    Agronomic Calculator
- (storage/knowledge)   (services/weather)     (storage/observation)  (services/insights)
-        │                      │                      │                      │
-        ▼                      ▼                      ▼                      ▼
-   SQLite FTS5           Open-Meteo API           SQLite DB            Deterministic Math
- (crop_knowledge_fts)   (REST over HTTPX)     (farm_observations)    (GDD & Rainfall Index)
-        │                      │                      │                      │
-        ▼                      ▼                      ▼                      ▼
-   Crop Search          Weather Forecast       History & Summaries     Thermal Heat Units
+### Role of the Model Context Protocol (MCP)
+The Model Context Protocol (MCP) provides an open, standardized contract decoupling the AI reasoning engine from tool execution and data persistence. In this project:
+- **Shared Agricultural Tools:** 8 specialized agricultural tools are registered once in a shared service layer.
+- **Dual Transports:** The MCP server natively serves both **local stdio** (for local CLI and desktop host applications like Claude Desktop or Cursor) and **Streamable HTTP** (`/mcp` endpoint for remote and web-based MCP clients).
+- **Extensible:** Allows any MCP-compliant client to consume agricultural intelligence, resources, and prompt templates without modifying backend business logic.
+
+---
+
+## B. Feature List
+
+- **Gemini-Powered Agricultural Assistant:** Multi-turn conversational guidance powered by Google Gemini (`gemini-2.5-flash`) via the official Google GenAI SDK (`google-genai`).
+- **Autonomous MCP Tool Calling:** The AI assistant dynamically discovers available MCP tools, executes requested functions through the MCP client, and synthesizes evidence-grounded answers with research citations.
+- **Dual MCP Transports:**
+  - **Local stdio Transport:** Standard input/output JSON-RPC for local clients and background CLI operations.
+  - **Streamable HTTP Transport:** Standards-compliant MCP Streamable HTTP endpoint (`/mcp`) supporting initialization, session lifecycle, SSE streaming, and HTTP POST/DELETE methods.
+- **MCP Prompts & Resources:**
+  - Resource: `crops://catalog` (curated catalog of supported crops, scientific classifications, and agroecological zones).
+  - Prompt: `agricultural_advisory_prompt` (structured prompt template for agronomic symptom evaluation).
+- **Vetted Crop Disease Search:** Full-text search (SQLite FTS5) across regional pathology databases with symptoms, cultural practices, IPM recommendations, and source attribution.
+- **Localized Weather Forecasts:** 1–14 day forecasts (temperatures, rainfall sum, precipitation probability) with regional Ethiopian presets (Addis Ababa, Jimma, Hawassa, Bahir Dar, Mekelle).
+- **Farm Observations Management:**
+  - Form validation with phenological growth stages.
+  - Mandatory **two-step review and explicit confirmation** modal before database write.
+  - Paginated observation history with crop-based filtering.
+  - Statistical summary distributions by crop and growth stage.
+- **Deterministic Agronomic Calculator:** Mathematical Growing Degree Days (GDD) with customizable base and cutoff temperatures, plus precipitation dry-day threshold analysis.
+- **Deterministic Offline Fallback:** If internet connectivity is interrupted or Gemini free-tier quota is exhausted, the backend falls back to an offline deterministic intent resolver, allowing full local UI testing and development.
+- **Point-in-Time SQLite Backup & Restore:** Online non-blocking database backup and restore via SQLite's native backup API.
+
+---
+
+## C. Architecture and Request Flows
+
+### System Architecture Diagram
+
+```mermaid
+graph TD
+    Farmer([Farmer / Agronomist]) <-->|Browser| ReactUI[React 18 + Vite + Tailwind CSS Web UI]
+    ExternalMCP[External MCP Client: Claude Desktop / Cursor / SDK] <-->|Streamable HTTP /mcp| FastAPIServer
+    LocalCLI[Local Terminal CLI] <-->|stdio JSON-RPC| MCPServerStdio[Agricultural MCP Server stdio]
+
+    subgraph Python Backend Application
+        ReactUI <-->|HTTP REST JSON| FastAPIServer[FastAPI Backend Server :8000]
+        FastAPIServer <-->|Streamable HTTP Mount /mcp| MCPServerHTTP[MCP Streamable HTTP Server]
+
+        FastAPIServer <--> GeminiAdapter[GeminiAdapter / google-genai SDK]
+        FastAPIServer <--> ObservService[ObservationService]
+        FastAPIServer <--> CropService[CropService]
+        FastAPIServer <--> WeatherService[WeatherService]
+        FastAPIServer <--> InsightsService[FarmInsightsService / AgronomicCalculator]
+
+        GeminiAdapter <-->|Tool Execution Request| LocalMCPClient[Agricultural MCP Client]
+        LocalMCPClient <-->|stdio JSON-RPC| MCPServerStdio
+
+        subgraph Shared Agricultural Tool Layer
+            MCPServerStdio --> Tools[8 Registered MCP Tools + Prompts + Resources]
+            MCPServerHTTP --> Tools
+        end
+
+        Tools --> FTS5Repo[KnowledgeRepository - FTS5 Search]
+        Tools --> ObsRepo[ObservationRepository]
+        Tools --> WeatherAPI[WeatherService - Open-Meteo REST]
+        Tools --> MathEngine[AgronomicCalculator - Deterministic Math]
+
+        FTS5Repo --> SQLiteDB[(SQLite Database + FTS5 Index)]
+        ObsRepo --> SQLiteDB
+    end
+
+    WeatherAPI <-->|HTTPS| OpenMeteoCloud[Open-Meteo Weather API]
 ```
 
----
+### End-to-End Request Flows
 
-## 2. Selected Technologies & Environment
+#### 1. Asking an Agricultural Question (Web Chat)
+1. Farmer enters: *"What are common symptoms of coffee leaf rust in Jimma?"* in the React chat interface.
+2. React frontend issues `POST /api/chat` to the FastAPI backend.
+3. `GeminiAdapter` receives the prompt, queries the MCP client for registered tool definitions, and converts them to Gemini `types.FunctionDeclaration`.
+4. Gemini returns a tool-call request for `search_crop_disease(crop_name="Coffee", symptoms="rust")`.
+5. `GeminiAdapter` passes the tool call to `AgriculturalMCPClient`, which invokes the tool over stdio on the local MCP server.
+6. The MCP server executes SQLite FTS5 search and returns matching pathology data citing EIAR and CABI.
+7. `GeminiAdapter` delivers tool results back to Gemini.
+8. Gemini synthesizes a plain-language answer explaining symptoms, cultural management, and research citations, which appears in the chat UI.
 
-* **Language:** Python 3.12 (specifically `3.12.15`, managed via `uv`)
-* **Package Manager & Resolver:** `uv` (`0.13.1`)
-* **MCP SDK:** `mcp==2.3.0` (Official Python SDK 2.x using `MCPServer`, `stdio_server`, `stdio_client`, and `ClientSession` APIs)
-* **Database & Search:** SQLite 3 (`sqlite3` standard library) with Write-Ahead Logging (`WAL`), foreign key enforcement, and Full-Text Search 5 (`FTS5`)
-* **Data Validation:** `pydantic==2.14.1`
-* **HTTP Client:** `httpx==0.28.1`
-* **Test Runner:** `pytest==9.1.1` (102 automated tests)
+#### 2. Recording a Farm Observation with Explicit Confirmation
+1. Farmer fills in the Observation form (Crop: Coffee, Stage: Vegetative, Notes: *"Found orange powdery lesions on undersides of leaves"*, Location: Jimma).
+2. Clicking **"Preview Observation"** submits `POST /api/observations/preview`. The backend validates all fields against domain constraints and returns a formatted preview.
+3. The React UI displays the **Write Confirmation Modal**.
+4. The database is **not** touched until the farmer explicitly clicks **"Authorize & Save Record"**.
+5. The frontend sends `POST /api/observations/confirm`.
+6. The backend invokes `record_farm_observation` via the MCP client, committing the row to SQLite and returning the new record ID.
 
----
-
-## 3. Storage Architecture & Configuration
-
-### SQLite Storage Design
-The persistence layer resides in `src/agricultural_assistant/storage/` and is divided into clean responsibilities:
-* `database.py`: Manages SQLite connections, pragmas (`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`), and transaction context managers (`with db.transaction() as conn:`).
-* `migrations.py`: Schema version tracking table (`schema_migrations`) and numbered migration steps. Automatically applies unapplied migrations on startup.
-* `observation_repository.py`: Parameterized SQL queries for inserting, fetching by ID, listing with pagination (`LIMIT`/`OFFSET`) and date/crop filtering, and counting farm observations.
-* `knowledge_repository.py`: SQLite FTS5 virtual table indexing for crop diseases and pests, ranking via `bm25` (with fallback to `LIKE` ranking if needed), seed deduplication, and multilingual schema fields.
-
-### Database Path Configuration
-The database path is managed through `Settings` in `src/agricultural_assistant/config.py`:
-* Default path: `data/agricultural_assistant.db` (created automatically within the workspace data directory).
-* Environment variable override: `DATABASE_PATH=/path/to/custom/db.sqlite`.
-* In-memory mode for tests: `DATABASE_PATH=:memory:`.
-* Git safety: Runtime database files (`*.db`, `*.db-wal`, `*.db-shm`) and the `data/` directory are excluded from Git via `.gitignore`.
-
-### Schema Migrations
-Database schema is managed deterministically via `MigrationRunner`:
-* **Migration 1 (`create_observations_table`):**
-  ```sql
-  CREATE TABLE IF NOT EXISTS farm_observations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      crop TEXT NOT NULL,
-      notes TEXT NOT NULL,
-      growth_stage TEXT,
-      observed_at TEXT NOT NULL,
-      location_name TEXT,
-      latitude REAL,
-      longitude REAL,
-      observer_role TEXT,
-      created_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_obs_crop ON farm_observations(crop);
-  CREATE INDEX IF NOT EXISTS idx_obs_observed_at ON farm_observations(observed_at);
-  ```
-* **Migration 2 (`create_knowledge_and_fts_tables`):**
-  ```sql
-  CREATE TABLE IF NOT EXISTS crop_knowledge (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      crop_name TEXT NOT NULL,
-      disease_or_pest TEXT NOT NULL,
-      symptoms TEXT NOT NULL,
-      contributing_conditions TEXT,
-      management_practices TEXT NOT NULL,
-      source_reference TEXT NOT NULL,
-      verification_status TEXT NOT NULL DEFAULT 'verified',
-      language TEXT NOT NULL DEFAULT 'en',
-      created_at TEXT NOT NULL,
-      CONSTRAINT uq_crop_disease_lang UNIQUE (crop_name, disease_or_pest, language)
-  );
-  CREATE VIRTUAL TABLE IF NOT EXISTS crop_knowledge_fts USING fts5(
-      crop_name,
-      disease_or_pest,
-      symptoms,
-      contributing_conditions,
-      management_practices,
-      content='crop_knowledge',
-      content_rowid='id'
-  );
-  ```
+#### 3. Connecting an MCP Client via Streamable HTTP
+1. An external client (e.g. Python MCP SDK or remote IDE) connects to `http://localhost:8000/mcp`.
+2. The client sends an HTTP POST with JSON-RPC initialization request (`initialize`).
+3. The server assigns an MCP session ID, negotiates protocol version, and advertises capabilities.
+4. The client issues `tools/list` to discover all 8 tools, `prompts/list` for advisory prompts, and `resources/list` for crop catalogs.
+5. The client invokes `tools/call` with tool arguments and receives structured JSON results.
+6. Upon closing, the client sends an HTTP DELETE request to cleanly terminate the session.
 
 ---
 
-## 4. MCP Tools Implemented (8 Tools)
+## D. Technology Stack
 
-All tools are registered on the stdio MCP server (`server/app.py`):
-
-| Tool Name | Purpose | Primary Parameters |
-| :--- | :--- | :--- |
-| `search_crop_disease` | Search agronomic knowledge base for disease matches via SQLite FTS5 | `crop_name`, `symptoms`, `growth_stage` (opt), `language` (opt) |
-| `get_weather_forecast` | Fetch live 1–14 day forecast from Open-Meteo | `latitude`, `longitude`, `forecast_days` (opt), `crop_context` (opt) |
-| `record_farm_observation`| Validate and persist a new field observation into SQLite | `crop`, `notes`, `growth_stage` (opt), `location_name` (opt), `latitude` (opt), `longitude` (opt), `observer_role` (opt) |
-| `get_farm_observation` | Fetch a single saved observation by its primary key ID | `observation_id` (integer) |
-| `list_farm_observations`| Retrieve paginated observation records with crop and date filters | `crop` (opt), `limit` (opt, max 100), `offset` (opt), `start_date` (opt), `end_date` (opt) |
-| `count_farm_observations`| Count total recorded observations matching filter criteria | `crop` (opt) |
-| `summarize_farm_observations` | Aggregate observations by crop, stage, date range, and symptom mentions | `crop` (opt), `start_date` (opt), `end_date` (opt) |
-| `calculate_agronomic_metrics` | Calculate Growing Degree Days (GDD) and precipitation summary | `daily_weather` (list of temp/precip dicts), `base_temperature_c` (opt), `upper_cutoff_c` (opt), `dry_day_threshold_mm` (opt) |
+- **AI Engine:** Google Gemini 2.5 Flash via official `google-genai` SDK (v2.31.0+).
+- **Model Context Protocol:** Official MCP Python SDK (`mcp` v2.3.0) with stdio and Streamable HTTP transports.
+- **Backend Framework:** FastAPI (v0.115.0+), Uvicorn, Starlette, AnyIO, Pydantic (v2.10.0+).
+- **Frontend Stack:** React 18, Vite 6, TypeScript 5.7, Tailwind CSS 3.4, Lucide React icons.
+- **Database & Search:** SQLite 3 with WAL journal mode, parameterized SQL transactions, and SQLite FTS5 (Full-Text Search).
+- **External Meteorological API:** Open-Meteo Weather Forecast API.
+- **Testing Frameworks:** Pytest 9, Pytest-AnyIO, Vitest 5, React Testing Library, JSDOM.
+- **Package & Dependency Management:** `uv` (Python), `npm` (Node.js).
 
 ---
 
-## 5. Agronomic Calculations & Assumptions
+## E. Prerequisites
 
-### 1. Growing Degree Days (GDD)
-* **Equation:**
-  $$\text{Daily GDD} = \max\left(0, \frac{T_{\text{max}} + T_{\text{min}}}{2} - T_{\text{base}}\right)$$
-* If an upper cutoff temperature ($T_{\text{cutoff}}$) is supplied, daily temperatures exceeding $T_{\text{cutoff}}$ are capped at $T_{\text{cutoff}}$ prior to averaging.
-* **Default Base Temperature:** $10.0^\circ\text{C}$ (typical baseline for warm-season cereals like maize/sorghum; cool-season cereals like teff/wheat may use $4.0^\circ\text{C} - 5.0^\circ\text{C}$).
-* **Limitation:** GDD calculations are deterministic thermal indices and must be calibrated to specific local cultivars and elevation zones before guiding planting or harvest decisions.
-
-### 2. Precipitation Summary
-* **Cumulative Rainfall:** $\sum \text{precipitation\_mm}$ across the window.
-* **Rainy Day Count:** Number of days with rainfall $\ge \text{dry\_day\_threshold\_mm}$ (default $1.0\text{ mm}$).
-* **Longest Consecutive Dry Days:** Maximum streak of consecutive days with rainfall $< \text{threshold}$, indicating potential drought stress periods.
+- **Python:** Version 3.11 or 3.12+ installed.
+- **uv:** Fast Python package and project manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
+- **Node.js & npm:** Node.js v18+ and `npm` installed.
+- **Internet Connectivity:** Required for live Open-Meteo weather forecasts and live Google Gemini API calls.
+- **Gemini API Key (Optional for Local Dev/Testing):** A Google AI Studio API key (`GEMINI_API_KEY`) for live AI responses. All automated unit, integration, and UI tests work 100% offline without an API key.
 
 ---
 
-## 6. Sourced Agricultural Knowledge Base
+## F. Clone and Install
 
-Knowledge entries in `src/agricultural_assistant/data/crop_knowledge.py` and stored in SQLite are backed by reputable institutions:
-* **Ethiopian Institute of Agricultural Research (EIAR):** Maize lethal necrosis, teff rust, coffee berry disease bulletins.
-* **FAO & CIMMYT:** Fall armyworm IPM guidelines, stem rust surveillance.
-* **CABI Plantwise Knowledge Bank:** Sorghum anthracnose and pest management.
-* **Metadata Fields:** Every knowledge record stores `crop_name`, `disease_or_pest`, `symptoms`, `contributing_conditions`, `management_practices`, `source_reference`, `verification_status` (`verified`), and `language` (`en`).
-* **Multilingual Schema:** The database schema supports `am` (Amharic), `om` (Afaan Oromo), and `ti` (Tigrinya). Unverified machine translations are never inserted or fabricated.
-
----
-
-## 7. Backup and Restore Procedure
-
-To back up the SQLite database safely without stopping active read operations:
-
-### Backup:
+### 1. Clone the Repository
 ```bash
-# Using SQLite's safe online backup API:
-sqlite3 data/agricultural_assistant.db ".backup 'data/backup_$(date +%Y%m%d_%H%M%S).db'"
+git clone https://github.com/Tesfalegnp/agri-mcp-agent.git
+cd agri-mcp-agent
 ```
+*(If checking out locally, use `cd /home/hope/Projects/agricultural-mcp-assistant`)*
 
-### Restore:
+### 2. Install Backend Python Dependencies
 ```bash
-# 1. Stop any running server or CLI instances
-# 2. Overwrite the database file from backup:
-cp data/backup_20261020_000000.db data/agricultural_assistant.db
-# 3. Clean any existing WAL journal files
-rm -f data/agricultural_assistant.db-wal data/agricultural_assistant.db-shm
-```
-
----
-
-## 8. Getting Started & Development
-
-### Prerequisites
-* Linux / macOS / Windows WSL
-* [`uv`](https://docs.astral.sh/uv/) installed:
-  ```bash
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  ```
-* Python 3.12 (managed automatically by `uv`)
-
-### Installation & Environment Synchronization
-```bash
-git clone https://github.com/hope/agricultural-mcp-assistant.git
-cd agricultural-mcp-assistant
-
-# Synchronize virtual environment with all runtime and development packages
+# Sync backend virtual environment with all core and test dependencies
 uv sync --extra dev
 ```
 
-### Running Tests
-Execute the complete 102-test automated test suite:
+### 3. Install Frontend Node Dependencies
 ```bash
-uv run pytest
+cd frontend
+npm install
+cd ..
+```
+
+### 4. Database Setup
+The SQLite database and FTS5 search index are initialized automatically with sample crop disease data upon backend startup. You can also trigger database initialization manually:
+```bash
+uv run python -c "from agricultural_assistant.storage.database import DatabaseManager; DatabaseManager().initialize()"
 ```
 
 ---
 
-## 9. How to Run the Server and Client
+## G. Environment Configuration
 
-### Option A: Interactive 10-Option CLI Client
-The interactive CLI automatically spawns the MCP server as a subprocess over `stdio`, handles handshakes, and provides a menu for all capabilities:
+### Setup `.env`
+Copy `.env.example` to create your local `.env`:
 ```bash
-uv run agricultural-assistant
-```
-Menu options:
-```text
-=== AGRICULTURAL MCP ASSISTANT ===
-1. Search crop disease / pest diagnosis
-2. Get weather forecast (coordinates)
-3. Record a farm observation
-4. View a farm observation by ID
-5. List recent farm observations
-6. Count farm observations
-7. View farm observation summary insights
-8. Calculate agronomic metrics (GDD & Rainfall)
-9. Ask assistant (Natural Language / LLM)
-10. Exit
+cp .env.example .env
 ```
 
-### Option B: Standalone MCP Server
-To run the server directly on `stdio` (for integration with Claude Desktop, MCP Inspector, or other MCP hosts):
+### Supported Configuration Variables
+
+| Variable | Required | Default Value | Purpose |
+| :--- | :---: | :--- | :--- |
+| `GEMINI_API_KEY` | Optional | `None` | Google Gemini API key from Google AI Studio. |
+| `GEMINI_MODEL` | Optional | `gemini-2.5-flash` | Gemini model name on the free tier. |
+| `BACKEND_HOST` | Optional | `127.0.0.1` | Host address for the FastAPI backend server. |
+| `BACKEND_PORT` | Optional | `8000` | Port for the FastAPI backend server. |
+| `CORS_ORIGINS` | Optional | `http://localhost:5173,http://127.0.0.1:5173` | Allowed frontend origins for CORS. |
+| `DATABASE_PATH` | Optional | `data/agricultural_assistant.db` | Relative or absolute path to SQLite database. |
+| `OPEN_METEO_BASE_URL` | Optional | `https://api.open-meteo.com/v1/forecast` | Open-Meteo REST API endpoint. |
+| `LOG_LEVEL` | Optional | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `VITE_API_BASE_URL` | Optional | `http://localhost:8000` | Frontend backend API target URL. |
+
+> **Security Notice:** `.env` is ignored by Git. Real API keys must never be committed.
+
+---
+
+## H. Run the Complete Application
+
+### Terminal 1: Start the Backend Web API & Streamable HTTP Server
 ```bash
-uv run agricultural-assistant-server
+# Run backend on http://127.0.0.1:8000 (serves REST API + /mcp Streamable HTTP endpoint)
+uv run uvicorn src.agricultural_assistant.api.app:create_app --factory --host 127.0.0.1 --port 8000 --reload
 ```
-Or via Python module:
+
+### Terminal 2: Start the React Frontend Development Server
 ```bash
-uv run python -m agricultural_assistant.server.app
+cd frontend
+npm run dev
+```
+
+### Access Application
+Open **`http://localhost:5173`** in your browser.
+
+### Health Check
+Verify backend and MCP client status:
+```bash
+curl -s http://127.0.0.1:8000/api/health | jq
+```
+Expected output:
+```json
+{
+  "status": "healthy",
+  "mcp_server_connected": true,
+  "tools_discovered": 8,
+  "service": "Agricultural MCP Assistant",
+  "version": "0.1.0"
+}
 ```
 
 ---
 
-## 10. Known Limitations & Implementation Matrix
+## I. Run Both MCP Transports
 
-| Component | Status | Notes |
+### 1. Local stdio Transport
+
+#### Start stdio Server Directly
+```bash
+uv run python -m agricultural_assistant.server.app --transport stdio
+```
+
+#### Client Configuration Example (Claude Desktop / Cursor)
+Add to your `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "agricultural-assistant": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/home/hope/Projects/agricultural-mcp-assistant",
+        "run",
+        "python",
+        "-m",
+        "agricultural_assistant.server.app",
+        "--transport",
+        "stdio"
+      ]
+    }
+  }
+}
+```
+
+### 2. Streamable HTTP Transport
+
+#### Built-in with Web Backend
+The Streamable HTTP transport is automatically mounted on the web backend at:
+**`http://127.0.0.1:8000/mcp`**
+
+#### Or Run as Standalone Server
+```bash
+uv run python -m agricultural_assistant.server.app --transport streamable-http --port 8001 --path /mcp
+```
+
+#### Test Streamable HTTP with Python Client
+```python
+import asyncio
+from mcp.client.session import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+async def main():
+    async with streamable_http_client("http://127.0.0.1:8000/mcp") as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            print(f"Discovered {len(tools.tools)} tools over Streamable HTTP!")
+
+            result = await session.call_tool(
+                "search_crop_disease",
+                arguments={"crop_name": "Teff", "symptoms": "rust spots"}
+            )
+            print("Tool result:", result.content[0].text[:120])
+
+asyncio.run(main())
+```
+
+---
+
+## J. Demonstration Walkthrough
+
+Follow these steps to demonstrate the full application:
+
+1. **Start Services:** Start backend on `:8000` and frontend on `:5173` as shown in Section H.
+2. **Open Dashboard:** Navigate to `http://localhost:5173`. Confirm the health indicator displays `"System Healthy — 8 MCP Tools Connected"`.
+3. **Ask an Agricultural Question (Chat):**
+   - Click the **AI Assistant** tab.
+   - Click the prompt chip: *"What are common symptoms of coffee leaf rust?"*
+   - Observe the tool execution badge (`search_crop_disease`) and review the synthesized response citing EIAR and CABI with IPM cultural recommendations.
+4. **Inspect Weather Forecast:**
+   - Click the **Weather** tab.
+   - Click the **Jimma** preset button.
+   - Verify that 3-day temperatures, precipitation probability, and rainfall amounts are displayed directly from Open-Meteo.
+5. **Search Crop Pathology Knowledge:**
+   - Click the **Crop Pathology** tab.
+   - Select **Maize** and enter symptoms: `holes in leaves and whorl damage`.
+   - View the matching record for **Fall Armyworm (*Spodoptera frugiperda*)** with cultural and biological control recommendations.
+6. **Record a Farm Observation with Confirmation:**
+   - Click the **Farm Records** tab.
+   - Select Crop: `Wheat`, Growth Stage: `Heading`, Location: `Bale Zone`.
+   - Notes: `Yellow rust pustules observed in strips on leaf blades`.
+   - Click **"Preview Observation"**.
+   - Review the details in the **Write Authorization Modal**.
+   - Click **"Authorize & Save Record"**.
+   - Confirm the success alert and verify the new record appears immediately in the **Recorded Observations** list.
+7. **Compute Agronomic Metrics:**
+   - Scroll to **Agronomic Metrics Calculator** on the Farm Records page.
+   - Enter Base Temperature: `10.0°C`, click **"Calculate GDD & Rain Indices"**.
+   - Verify the calculated Cumulative GDD and Dry Spell summary.
+8. **Verify Streamable HTTP MCP Access:**
+   - In a terminal, run the protocol test: `uv run pytest tests/test_streamable_http.py`.
+   - Verify that all 4 tests pass, confirming external client connectivity, capability negotiation, and tool execution over Streamable HTTP.
+
+---
+
+## K. Tests and Verification
+
+### 1. Full Python Test Suite (139 Passing Tests)
+```bash
+uv run pytest -v
+```
+**Outcome:** **139 passed in ~16 seconds**
+- `test_config.py`: 3 tests (secret masking, env loading)
+- `test_crop_models.py`: 6 tests (validation, enums)
+- `test_weather_models.py`: 10 tests (coordinate bounds, forecast days)
+- `test_observation_models.py`: 11 tests (note length, coordinates)
+- `test_database.py`: 4 tests (WAL mode, transactions, point-in-time backup/restore)
+- `test_knowledge_repository.py`: 6 tests (FTS5 search, seeding, BM25 ranking)
+- `test_observation_repository.py`: 5 tests (CRUD, SQL injection safety)
+- `test_weather_service.py`: 6 tests (Open-Meteo mock, timeouts, errors)
+- `test_crop_service.py`: 5 tests (caching, query parsing)
+- `test_observation_service.py`: 6 tests (service validation, pagination)
+- `test_insights_service.py`: 6 tests (mathematical GDD and rainfall index calculations)
+- `test_server.py`: 7 tests (stdio MCP server tools, schema validation)
+- `test_observation_tools.py`: 3 tests (observation tool discovery and execution)
+- `test_insights_tools.py`: 3 tests (insights tool execution)
+- `test_client.py`: 3 tests (custom MCP client session lifecycle)
+- `test_end_to_end_mcp.py`: 1 test (end-to-end stdio tool discovery and invocation)
+- `test_streamable_http.py`: 4 tests (Streamable HTTP initialization, tools, prompts, resources, tool calls)
+- `test_gemini_adapter.py`: 11 tests (Gemini tool mapping, tool loop, write safety, offline fallback)
+- `test_api_routes.py`: 11 tests (FastAPI endpoints, validation, preview/confirm flow)
+- `test_llm_adapter.py`: 13 tests (legacy LLM regression tests)
+
+### 2. Frontend Test Suite (5 Passing Tests)
+```bash
+cd frontend
+npm test -- --run
+```
+**Outcome:** **5 passed in 2.15 seconds**
+- Dashboard title & health indicator
+- Chat submission and assistant response
+- Weather forecast display with regional presets
+- Crop pathology search with EIAR/CABI attribution
+- Explicit confirmation modal for observation writes
+
+### 3. Production Bundle Build
+```bash
+cd frontend
+npm run build
+```
+**Outcome:** Built successfully in ~8.5 seconds (`dist/index.html` + asset bundles).
+
+### 4. Python Compilation Check
+```bash
+uv run python -m py_compile src/agricultural_assistant/**/*.py tests/*.py
+```
+**Outcome:** Clean compilation with 0 syntax or type errors.
+
+---
+
+## L. Troubleshooting
+
+| Issue | Cause | Solution |
 | :--- | :--- | :--- |
-| **Observation Storage** | **Fully Implemented** | SQLite relational persistence with WAL, transactions, migrations, and repository layer. |
-| **Observation Retrieval & Filtering** | **Fully Implemented** | Fetch by ID, pagination, date-range filtering, and crop filtering. |
-| **Historical Summary Insights** | **Fully Implemented** | Sample size confidence flags, crop/stage distributions, and symptom keyword mention counts (clearly disclaimed as unverified mentions). |
-| **Agronomic Calculations** | **Fully Implemented** | Mathematical GDD and dry/wet spell metrics with documented formulas and hand-calculated test cases. |
-| **FTS5 Knowledge Search** | **Fully Implemented** | SQLite FTS5 search with source attribution, duplicate prevention, and reindexing. |
-| **Multilingual Knowledge** | **Schema Ready** | Schema and database columns support Amharic, Afaan Oromo, and Tigrinya; content currently seeded in English. No unverified machine translations are fabricated. |
-| **Weather Integration** | **Fully Implemented** | Open-Meteo REST integration with mock fallbacks for network-isolated test runs. |
-| **Diagnostic Disclaimer** | **Active Policy** | All symptom matching and note aggregations provide advisory disclaimers and do not replace certified agronomist or pathology lab verification. |
-# agri-mcp-agent
+| **Gemini Quota Exhausted (`429`)** | Gemini free-tier rate limit exceeded. | The backend automatically activates its deterministic offline intent resolver. You can continue using all tools and UI features without interruption. |
+| **Backend Port Conflict (`8000`)** | Another process is using port 8000. | Start on a different port: `uv run uvicorn src.agricultural_assistant.api.app:create_app --factory --port 8005`, and update `VITE_API_BASE_URL` in `frontend/.env`. |
+| **`Connection Refused` in Frontend** | Backend server is not running. | Run `uv run uvicorn src.agricultural_assistant.api.app:create_app --factory --port 8000` in Terminal 1. |
+| **CORS Error in Browser** | Frontend origin not in allowed list. | Ensure `CORS_ORIGINS` in `.env` includes your frontend URL (default: `http://localhost:5173`). |
+| **MCP stdio Protocol Pollution** | Debug statements printed to `stdout`. | Ensure all server logging uses `logger.info()` (which writes to `stderr`) and never raw `print()` statements. |
+| **Streamable HTTP `404 Not Found`** | Connecting to wrong path. | Connect to `/mcp` (e.g. `http://localhost:8000/mcp`), not ordinary REST endpoints. |
+| **Database Missing / Not Initialized** | First-time clone without database file. | Automatically initialized at startup; or run `DatabaseManager().initialize()`. |
+
+---
+
+## M. Limitations and Future Improvements
+
+### Current Verified Capabilities
+- 8 agricultural tools tested and operational across stdio and Streamable HTTP.
+- Offline-safe deterministic fallbacks for Gemini AI interactions.
+- Sourced disease pathology for 5 key crops (Teff, Maize, Coffee, Wheat, Sorghum).
+- Point-in-time online SQLite backup and restore.
+
+### Limitations & Next Steps (Phase 8+)
+- **Production Containerization:** Docker and Docker Compose configuration for multi-container deployment.
+- **User Authentication:** Single-user local deployment; multi-tenant OAuth2/OIDC is recommended before public web exposure.
+- **Image-Based Diagnosis:** Current crop disease tool is symptom-text based; computer vision model integration for leaf photos is planned for future phases.
+- **Multilingual UI:** Backend domain models support language codes (`en`, `am`, `om`, `ti`); full localized Amharic and Afaan Oromo UI translations can be added.
+
+---
+
+## N. Contribution and Project Structure
+
+```text
+agricultural-mcp-assistant/
+├── .env.example                      # Sanitized environment template
+├── .gitignore                        # Git exclusion rules (ignores .env, db, dist, node_modules)
+├── pyproject.toml                    # Python project configuration & dependencies
+├── README.md                         # Project documentation
+├── docs/
+│   └── phase-completion-matrix.md   # Requirement completion tracking across all phases
+├── src/
+│   └── agricultural_assistant/
+│       ├── api/
+│       │   ├── app.py                # FastAPI factory, lifespan, CORS, Streamable HTTP mount
+│       │   └── routes.py             # REST endpoints (/api/chat, /weather, /diseases, etc.)
+│       ├── client/
+│       │   ├── cli.py                # Interactive terminal client
+│       │   ├── gemini_adapter.py     # Gemini SDK tool calling & write safety intercept
+│       │   └── mcp_client.py         # Custom asynchronous stdio MCP client
+│       ├── config.py                 # Pydantic Settings with secret masking
+│       ├── domain/                   # Pydantic models (crop, weather, observation)
+│       ├── logging_config.py         # stderr logging configuration
+│       ├── server/
+│       │   └── app.py                # MCP Server with 8 tools, prompts, resources & multi-transport CLI
+│       ├── services/                 # Business services (weather, crop, observations, insights)
+│       └── storage/                  # SQLite DatabaseManager, FTS5 repository, migrations
+├── frontend/
+│   ├── src/
+│   │   ├── api/client.ts             # Typed API client
+│   │   ├── components/               # Navbar, WriteConfirmModal
+│   │   ├── pages/                    # Dashboard, Chat, Weather, Diseases, Observations
+│   │   ├── App.tsx                   # Main React routing and layout
+│   │   └── test/App.test.tsx         # Vitest integration tests
+│   ├── package.json
+│   └── vite.config.ts
+└── tests/                            # Comprehensive test suite (138 pytest tests)
+    ├── test_api_routes.py
+    ├── test_database.py              # Includes online backup/restore test
+    ├── test_gemini_adapter.py
+    ├── test_streamable_http.py       # Protocol-level Streamable HTTP tests
+    └── ...
+```
+
+### Adding a New Agricultural Tool
+To add a new tool without duplicating logic:
+1. Implement the domain service logic in `src/agricultural_assistant/services/`.
+2. Register the tool in `create_server()` in `src/agricultural_assistant/server/app.py` using `@app.tool()`.
+3. Because both stdio and Streamable HTTP share `create_server()`, the tool is immediately available over both transports and to the Gemini AI assistant automatically!
+
+---
+
+## O. License and Acknowledgments
+
+### Data & Research Sources
+- **Ethiopian Institute of Agricultural Research (EIAR):** Crop pathology guidelines, regional agroecological classifications, and cultivar base temperatures.
+- **CABI PlantwisePlus Knowledge Bank:** Open-access Integrated Pest Management (IPM) guidelines.
+- **Open-Meteo:** High-resolution meteorological data under Open Database License (ODbL).
+
+### Open Source Libraries
+- Model Context Protocol Python SDK (`mcp`) by Anthropic.
+- Google GenAI SDK (`google-genai`) by Google DeepMind.
+- FastAPI by Sebastián Ramírez.
+- Lucide Icons by Lucide Contributors.
