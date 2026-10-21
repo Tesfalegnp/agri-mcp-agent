@@ -1,7 +1,8 @@
 """Custom Model Context Protocol (MCP) Client for the Agricultural Assistant.
 
-Communicates with the Agricultural MCP Server over the standard input/output
-(stdio) transport using the official MCP Python SDK.
+Communicates with the Agricultural MCP Server over:
+1. Standard input/output (stdio) transport for local subprocess execution.
+2. Streamable HTTP transport for remote client-server connections with OAuth 2.1 authorization.
 """
 
 from __future__ import annotations
@@ -10,24 +11,36 @@ import json
 import logging
 import shutil
 import sys
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Literal, Optional
 
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.types import Tool
+import mcp.client.streamable_http as streamable_http_module
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import Prompt, Resource, Tool
 
 logger = logging.getLogger("agricultural_assistant.client")
 
 
 class AgriculturalMCPClient:
-    """Client for interacting with the Agricultural MCP Server."""
+    """Client for interacting with the Agricultural MCP Server over stdio or Streamable HTTP."""
 
     def __init__(
         self,
+        transport: Literal["stdio", "streamable-http"] = "stdio",
+        server_url: Optional[str] = None,
+        bearer_token: Optional[str] = None,
         server_command: Optional[str] = None,
         server_args: Optional[List[str]] = None,
         server_env: Optional[Dict[str, str]] = None,
+        timeout: float = 30.0,
     ) -> None:
+        self.transport = transport
+        self.server_url = server_url or "http://127.0.0.1:8000/mcp"
+        self.bearer_token = bearer_token
+        self.timeout = timeout
+
         # Default to launching through uv if available, or direct python module
         if server_command is None:
             if shutil.which("uv"):
@@ -43,10 +56,15 @@ class AgriculturalMCPClient:
         self.server_env = server_env
         self._session: Optional[ClientSession] = None
         self._stdio_context = None
+        self._http_context = None
+        self._http_client = None
         self._session_context = None
+        self._connected_at: Optional[float] = None
+        self._last_error: Optional[str] = None
+        self._cached_tools: List[Tool] = []
 
     async def connect(self) -> ClientSession:
-        """Initialize and start the stdio connection with the MCP server.
+        """Initialize and start the connection with the MCP server over configured transport.
 
         Returns:
             Active ClientSession.
@@ -54,6 +72,18 @@ class AgriculturalMCPClient:
         Raises:
             ConnectionError: If unable to spawn server or complete protocol handshake.
         """
+        # Clean up any existing connection first
+        await self.close()
+
+        if self.transport == "stdio":
+            return await self._connect_stdio()
+        elif self.transport == "streamable-http":
+            return await self._connect_streamable_http()
+        else:
+            raise ValueError(f"Unsupported MCP transport: '{self.transport}'")
+
+    async def _connect_stdio(self) -> ClientSession:
+        """Connect to MCP server via local stdio subprocess."""
         params = StdioServerParameters(
             command=self.server_command,
             args=self.server_args,
@@ -68,22 +98,71 @@ class AgriculturalMCPClient:
             self._session = await self._session_context.__aenter__()
 
             init_result = await self._session.initialize()
-            logger.info("Connected to MCP Server: %s (version: %s)", init_result.server_info.name, init_result.server_info.version)
+            self._connected_at = time.time()
+            self._last_error = None
+            logger.info(
+                "Connected to MCP Server via stdio: %s (version: %s)",
+                init_result.server_info.name,
+                init_result.server_info.version,
+            )
             return self._session
 
         except FileNotFoundError as exc:
+            self._last_error = str(exc)
             await self.close()
             raise ConnectionError(
                 f"Failed to find executable '{self.server_command}'. Ensure 'uv' or Python is installed."
             ) from exc
         except Exception as exc:
+            self._last_error = str(exc)
             await self.close()
             raise ConnectionError(
-                f"Failed to connect to Agricultural MCP Server: {exc}"
+                f"Failed to connect to Agricultural MCP Server via stdio: {exc}"
+            ) from exc
+
+    async def _connect_streamable_http(self) -> ClientSession:
+        """Connect to MCP server via Streamable HTTP with optional OAuth token."""
+        headers: Dict[str, str] = {}
+        if self.bearer_token:
+            headers["Authorization"] = f"Bearer {self.bearer_token}"
+
+        try:
+            # Use httpx2 client compatible with mcp.client.streamable_http
+            self._http_client = streamable_http_module.httpx2.AsyncClient(
+                headers=headers,
+                timeout=self.timeout,
+            )
+            http_ctx = streamable_http_client(
+                self.server_url,
+                http_client=self._http_client,
+            )
+            read_stream, write_stream = await http_ctx.__aenter__()
+            self._http_context = http_ctx
+
+            session_ctx = ClientSession(read_stream, write_stream)
+            self._session = await session_ctx.__aenter__()
+            self._session_context = session_ctx
+
+            init_result = await self._session.initialize()
+            self._connected_at = time.time()
+            self._last_error = None
+            logger.info(
+                "Connected to MCP Server via Streamable HTTP at %s: %s (version: %s)",
+                self.server_url,
+                init_result.server_info.name,
+                init_result.server_info.version,
+            )
+            return self._session
+
+        except Exception as exc:
+            self._last_error = str(exc)
+            await self.close()
+            raise ConnectionError(
+                f"Failed to connect to Agricultural MCP Server via Streamable HTTP at {self.server_url}: {exc}"
             ) from exc
 
     async def close(self) -> None:
-        """Cleanly close the MCP session and terminate the server subprocess."""
+        """Cleanly close the MCP session and terminate transport resources."""
         if self._session_context:
             try:
                 await self._session_context.__aexit__(None, None, None)
@@ -99,6 +178,22 @@ class AgriculturalMCPClient:
                 logger.debug("Error closing stdio transport: %s", exc)
             self._stdio_context = None
 
+        if self._http_context:
+            try:
+                await self._http_context.__aexit__(None, None, None)
+            except Exception as exc:
+                logger.debug("Error closing Streamable HTTP transport: %s", exc)
+            self._http_context = None
+
+        if self._http_client:
+            try:
+                await self._http_client.aclose()
+            except Exception as exc:
+                logger.debug("Error closing HTTP client: %s", exc)
+            self._http_client = None
+
+        self._connected_at = None
+
     async def __aenter__(self) -> AgriculturalMCPClient:
         await self.connect()
         return self
@@ -107,16 +202,55 @@ class AgriculturalMCPClient:
         await self.close()
 
     @property
+    def is_connected(self) -> bool:
+        """Return True if an active ClientSession exists."""
+        return self._session is not None
+
+    @property
     def session(self) -> ClientSession:
         """Get the active session or raise ConnectionError."""
         if self._session is None:
             raise ConnectionError("MCP Client is not connected. Call connect() first.")
         return self._session
 
+    def get_status(self) -> Dict[str, Any]:
+        """Return snapshot diagnostics of current connection and transport."""
+        return {
+            "transport": self.transport,
+            "is_connected": self.is_connected,
+            "server_url": self.server_url if self.transport == "streamable-http" else None,
+            "subprocess_command": f"{self.server_command} {' '.join(self.server_args)}" if self.transport == "stdio" else None,
+            "has_bearer_token": bool(self.bearer_token),
+            "connected_at": self._connected_at,
+            "last_error": self._last_error,
+            "cached_tools_count": len(self._cached_tools),
+        }
+
     async def list_tools(self) -> List[Tool]:
         """Discover and return all registered tools from the MCP server."""
         result = await self.session.list_tools()
-        return result.tools
+        self._cached_tools = list(result.tools)
+        return self._cached_tools
+
+    async def list_resources(self) -> List[Resource]:
+        """Discover and return all registered resources from the MCP server."""
+        result = await self.session.list_resources()
+        return list(result.resources)
+
+    async def read_resource(self, uri: str) -> Any:
+        """Read content from an MCP resource by URI."""
+        result = await self.session.read_resource(uri)
+        return result
+
+    async def list_prompts(self) -> List[Prompt]:
+        """Discover and return all registered prompts from the MCP server."""
+        result = await self.session.list_prompts()
+        return list(result.prompts)
+
+    async def get_prompt(self, name: str, arguments: Optional[Dict[str, str]] = None) -> Any:
+        """Retrieve a formatted prompt template from the MCP server."""
+        result = await self.session.get_prompt(name, arguments=arguments)
+        return result
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Dynamically invoke any registered MCP tool by name."""

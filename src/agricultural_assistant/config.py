@@ -62,6 +62,32 @@ class Settings(BaseModel):
         default=8000,
         description="Port for the FastAPI HTTP web server.",
     )
+    # OAuth 2.1 Configuration (Phase 5)
+    oauth_enforce_remote: bool = Field(
+        default=True,
+        description="Whether to enforce OAuth 2.1 Bearer authentication on Streamable HTTP /mcp endpoint.",
+    )
+    oauth_issuer: str = Field(
+        default="http://127.0.0.1:8000",
+        description="Expected OAuth 2.1 token issuer URL.",
+    )
+    oauth_resource_url: str = Field(
+        default="http://127.0.0.1:8000/mcp",
+        description="Expected OAuth 2.1 target resource URI (audience).",
+    )
+    oauth_secret_key: Optional[str] = Field(
+        default=None,
+        description="Secret key for signing HMAC-SHA256 OAuth tokens (generated automatically if not set).",
+    )
+    # MCP Transport Configuration (Phase 4)
+    mcp_default_transport: Literal["stdio", "streamable-http"] = Field(
+        default="stdio",
+        description="Initial MCP transport to connect on startup ('stdio' or 'streamable-http').",
+    )
+    mcp_streamable_url: str = Field(
+        default="http://127.0.0.1:8000/mcp",
+        description="Streamable HTTP MCP endpoint URL.",
+    )
     cors_origins: List[str] = Field(
         default_factory=lambda: [
             "http://localhost:5173",
@@ -155,6 +181,14 @@ def get_settings() -> Settings:
             "http://127.0.0.1:3000",
         ]
 
+    enforce_remote_raw = os.getenv("OAUTH_ENFORCE_REMOTE", "true").lower()
+    oauth_enforce_remote = enforce_remote_raw in ("true", "1", "yes")
+
+    mcp_transport_raw = os.getenv("MCP_DEFAULT_TRANSPORT", "stdio").strip().lower()
+    mcp_default_transport: Literal["stdio", "streamable-http"] = (
+        "streamable-http" if mcp_transport_raw in ("streamable-http", "http") else "stdio"
+    )
+
     return Settings(
         app_env=os.getenv("APP_ENV", "development"),  # type: ignore[arg-type]
         log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -166,6 +200,12 @@ def get_settings() -> Settings:
         gemini_model=gemini_model,
         backend_host=os.getenv("BACKEND_HOST", "127.0.0.1"),
         backend_port=port,
+        oauth_enforce_remote=oauth_enforce_remote,
+        oauth_issuer=os.getenv("OAUTH_ISSUER", "http://127.0.0.1:8000"),
+        oauth_resource_url=os.getenv("OAUTH_RESOURCE_URL", "http://127.0.0.1:8000/mcp"),
+        oauth_secret_key=os.getenv("OAUTH_SECRET_KEY"),
+        mcp_default_transport=mcp_default_transport,
+        mcp_streamable_url=os.getenv("MCP_STREAMABLE_URL", "http://127.0.0.1:8000/mcp"),
         cors_origins=cors_origins,
         openai_api_key=openai_key,
         openai_model=openai_model,

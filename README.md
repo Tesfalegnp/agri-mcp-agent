@@ -14,10 +14,14 @@ The **Agricultural MCP Assistant** is an AI-powered application designed to supp
 
 The primary goal is to demonstrate how an AI assistant can interact with external tools and structured data sources instead of relying only on its built-in language capabilities. By connecting an AI model (Google Gemini) to an MCP server, the application can retrieve relevant agricultural knowledge, access live weather forecasts, perform supported agronomic calculations, manage persistent farm observation records, and present everything through an intuitive web interface.
 
-> 📄 **Companion Documents & Reports:**
-> - [Project Evaluation Report (`docs/project-report.md`)](docs/project-report.md) — Complete overview report based on project specifications.
-> - [Architecture & Implementation Summary (`SUMMARY.md`)](SUMMARY.md) — Technical deep-dive and two-tool demo reproducibility.
-> - [Google Docs Reference](https://docs.google.com/document/d/1FmpE9E8Iiw8ysO2DdyMx9ADGxAJ6nblnFDpz-wEz1ws/edit?usp=sharing)
+> 📄 **Evaluator Deliverables & Technical Reports:**
+> - [Final Verification Report (`docs/final-verification.md`)](docs/final-verification.md) — Comprehensive three-category verification report and security audit.
+> - [Implementation Audit (`docs/implementation-audit.md`)](docs/implementation-audit.md) — Requirement-by-requirement audit with verification evidence.
+> - [System Architecture (`docs/architecture.md`)](docs/architecture.md) — End-to-end architecture, sequence diagrams, transport comparison, and OAuth 2.1 specs.
+> - [Testing & Verification Report (`docs/testing-and-verification.md`)](docs/testing-and-verification.md) — 175 pytest + 5 vitest tests, MCP inspector reproducibility commands.
+> - [Evaluator Demonstration Script (`docs/evaluator-demo.md`)](docs/evaluator-demo.md) — Repeatable 5–8 minute live walkthrough with exact queries and states.
+> - [Executive Project Summary (`docs/project-summary.md`)](docs/project-summary.md) — Concise executive summary of what was built.
+> - [Project Evaluation Report (`docs/project-report.md`)](docs/project-report.md) — Comprehensive narrative report.
 
 ### Main Objectives
 * **Develop a custom MCP server** with agricultural tools.
@@ -218,7 +222,7 @@ graph TD
 git clone https://github.com/Tesfalegnp/agri-mcp-agent.git
 cd agri-mcp-agent
 ```
-*(If checking out locally, use `cd /home/hope/Projects/agricultural-mcp-assistant`)*
+*(Or navigate to your cloned repository root directory)*
 
 ### 2. Install Backend Python Dependencies
 ```bash
@@ -320,7 +324,7 @@ Add to your `claude_desktop_config.json`:
       "command": "uv",
       "args": [
         "--directory",
-        "/home/hope/Projects/agricultural-mcp-assistant",
+        "/path/to/agricultural-mcp-assistant",
         "run",
         "python",
         "-m",
@@ -537,33 +541,39 @@ agricultural-mcp-assistant/
 ├── src/
 │   └── agricultural_assistant/
 │       ├── api/
-│       │   ├── app.py                # FastAPI factory, lifespan, CORS, Streamable HTTP mount
-│       │   └── routes.py             # REST endpoints (/api/chat, /weather, /diseases, etc.)
+│       │   ├── app.py                # FastAPI factory, lifespan, CORS, OAuth middleware & Streamable HTTP mount
+│       │   └── routes.py             # REST & SSE endpoints (/api/chat/stream, /api/mcp/*, /api/oauth/*, etc.)
 │       ├── client/
 │       │   ├── cli.py                # Interactive terminal client
 │       │   ├── gemini_adapter.py     # Gemini SDK tool calling & write safety intercept
-│       │   └── mcp_client.py         # Custom asynchronous stdio MCP client
-│       ├── config.py                 # Pydantic Settings with secret masking
+│       │   ├── mcp_client.py         # Official MCP Python SDK client (stdio & Streamable HTTP)
+│       │   └── orchestrator.py       # Multi-turn conversation state machine & slot-filling orchestrator
+│       ├── config.py                 # Pydantic Settings with secret masking, OAuth & transport config
 │       ├── domain/                   # Pydantic models (crop, weather, observation)
 │       ├── logging_config.py         # stderr logging configuration
 │       ├── server/
-│       │   └── app.py                # MCP Server with 8 tools, prompts, resources & multi-transport CLI
+│       │   ├── app.py                # MCP Server with 8 tools, prompts, resources & multi-transport CLI
+│       │   └── oauth.py              # OAuth 2.1 authorization server, PKCE S256, JWT verifier & scopes
 │       ├── services/                 # Business services (weather, crop, observations, insights)
 │       └── storage/                  # SQLite DatabaseManager, FTS5 repository, migrations
 ├── frontend/
 │   ├── src/
-│   │   ├── api/client.ts             # Typed API client
+│   │   ├── api/client.ts             # Typed API client with SSE streaming, transport switching & OAuth
 │   │   ├── components/               # Navbar, WriteConfirmModal
-│   │   ├── pages/                    # Dashboard, Chat, Weather, Diseases, Observations
+│   │   ├── pages/                    # Dashboard, Chat (with live timeline & MCP inspector), Weather, Diseases, Observations
 │   │   ├── App.tsx                   # Main React routing and layout
-│   │   └── test/App.test.tsx         # Vitest integration tests
+│   │   └── test/App.test.tsx         # Vitest integration tests (5 passed)
 │   ├── package.json
 │   └── vite.config.ts
-└── tests/                            # Comprehensive test suite (139 pytest tests)
-    ├── test_api_routes.py
-    ├── test_database.py              # Includes online backup/restore test
-    ├── test_gemini_adapter.py
-    ├── test_streamable_http.py       # Protocol-level Streamable HTTP tests
+└── tests/                            # Comprehensive test suite (175 pytest tests, 100% pass)
+    ├── test_oauth2.py                # OAuth 2.1 PKCE, tokens, scopes & middleware tests
+    ├── test_multiturn_conversations.py # Multi-turn clarification & resumption tests
+    ├── test_client_transports.py     # Stdio & Streamable HTTP client tests
+    ├── test_progress_stream.py       # Live SSE progress streaming tests
+    ├── test_api_routes.py            # Application API route tests
+    ├── test_database.py              # SQLite FTS5 & backup tests
+    ├── test_gemini_adapter.py        # Gemini adapter & tool execution tests
+    ├── test_streamable_http.py       # Starlette /mcp Streamable HTTP tests
     └── ...
 ```
 
@@ -580,7 +590,7 @@ To add a new tool without duplicating logic:
 ### Conclusion
 The **Agricultural MCP Assistant** demonstrates the integration of an AI model with specialized agricultural tools through the Model Context Protocol. Its main contribution is the combination of agricultural knowledge retrieval, weather access, persistent farm-observation management, agronomic calculations, and an interactive web interface within a modular, extensible application.
 
-The implementation illustrates how MCP provides a clean, standardized contract between an AI model and external capabilities, while comprehensive automated tests (139 backend + 5 frontend) and thorough documentation support reproducibility, safety, and evaluation.
+The implementation illustrates how MCP provides a clean, standardized contract between an AI model and external capabilities, while comprehensive automated tests (175 backend + 5 frontend) and thorough documentation support reproducibility, safety, and evaluation.
 
 ### Author & Repository
 - **Prepared by:** Tesfalegn Petros

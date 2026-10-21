@@ -19,6 +19,18 @@ vi.mock('../api/client', async () => {
       confirmObservation: vi.fn(),
       summarizeObservations: vi.fn(),
       calculateMetrics: vi.fn(),
+      getMcpStatus: vi.fn(),
+      streamChat: vi.fn(),
+      switchTransport: vi.fn(),
+      getTools: vi.fn(),
+      getResources: vi.fn(),
+      readResource: vi.fn(),
+      getPrompts: vi.fn(),
+      getPromptTemplate: vi.fn(),
+      getOAuthMetadata: vi.fn(),
+      getDemoToken: vi.fn(),
+      getConversation: vi.fn(),
+      resetConversation: vi.fn(),
     },
   };
 });
@@ -26,6 +38,37 @@ vi.mock('../api/client', async () => {
 describe('Agricultural MCP Assistant Web App Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (api.getMcpStatus as any).mockResolvedValue({
+      transport: 'stdio',
+      connected: true,
+      tools_count: 8,
+      resources_count: 1,
+      prompts_count: 1,
+      oauth_enforced: true,
+      endpoint: null,
+    });
+    (api.streamChat as any).mockResolvedValue({
+      status: 'success',
+      conversation_id: 'conv_test_123',
+      llm_response: 'Based on your symptoms, your coffee plants may have Coffee Leaf Rust.',
+      tool_calls_executed: [
+        {
+          tool_name: 'search_crop_disease',
+          arguments: { crop_name: 'coffee', symptoms: 'rust' },
+          result: { status: 'success' },
+        },
+      ],
+      activity_events: [
+        {
+          event_id: 'ev_1',
+          timestamp: '2026-10-21T18:00:00Z',
+          step: 'tool_execution_completed',
+          label: 'Executed search_crop_disease',
+          status: 'completed',
+          elapsed_ms: 120,
+        },
+      ],
+    });
     (api.getHealth as any).mockResolvedValue({
       status: 'healthy',
       mcp_server_connected: true,
