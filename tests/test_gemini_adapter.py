@@ -319,7 +319,10 @@ class TestGeminiAdapter:
         assert mock_client.models.generate_content.call_count == 3
 
     @pytest.mark.anyio
-    async def test_deterministic_offline_fallback(self, sample_mcp_tools: List[Tool]) -> None:
+    async def test_deterministic_offline_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, sample_mcp_tools: List[Tool]
+    ) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "")
         mock_mcp = AsyncMock(spec=AgriculturalMCPClient)
         mock_mcp.list_tools.return_value = sample_mcp_tools
         mock_mcp.search_crop_disease.return_value = {
@@ -336,7 +339,7 @@ class TestGeminiAdapter:
         }
 
         # Adapter initialized with no API key (offline / fallback mode)
-        adapter = GeminiAdapter(api_key=None, client=None)
+        adapter = GeminiAdapter(api_key="", client=None)
         result = await adapter.run_prompt("What are symptoms of coffee rust disease?", mock_mcp)
 
         assert result["status"] == "success"

@@ -51,13 +51,41 @@ AGRICULTURAL_SYSTEM_PROMPT = (
 WRITE_TOOLS = {"record_farm_observation"}
 
 
+def _clean_schema_for_gemini(schema: Any) -> Any:
+    """Clean and normalize JSON Schema for Gemini FunctionDeclaration OpenAPI compliance."""
+    if not isinstance(schema, dict):
+        return schema
+    cleaned: Dict[str, Any] = {}
+    for k, v in schema.items():
+        if k in ("additionalProperties", "additional_properties", "title", "$schema"):
+            continue
+        if k == "anyOf" and isinstance(v, list):
+            non_nulls = [item for item in v if isinstance(item, dict) and item.get("type") != "null"]
+            if len(non_nulls) == 1:
+                child = _clean_schema_for_gemini(non_nulls[0])
+                if isinstance(child, dict):
+                    cleaned.update(child)
+                cleaned["nullable"] = True
+                continue
+        if isinstance(v, dict):
+            cleaned[k] = _clean_schema_for_gemini(v)
+        elif isinstance(v, list):
+            cleaned[k] = [_clean_schema_for_gemini(item) if isinstance(item, dict) else item for item in v]
+        else:
+            cleaned[k] = v
+    return cleaned
+
+
 def convert_mcp_tool_to_gemini(tool: Tool) -> types.FunctionDeclaration:
     """Convert an MCP Tool definition to a Gemini FunctionDeclaration.
 
     Preserves tool names, descriptions, parameter types, required fields,
-    and optional fields.
+    and optional fields while ensuring compliance with Gemini OpenAPI constraints.
     """
-    parameters = dict(tool.input_schema) if tool.input_schema else {"type": "object", "properties": {}}
+    raw_parameters = dict(tool.input_schema) if tool.input_schema else {"type": "object", "properties": {}}
+    parameters = _clean_schema_for_gemini(raw_parameters)
+    if not isinstance(parameters, dict):
+        parameters = {"type": "object", "properties": {}}
     if "type" not in parameters:
         parameters["type"] = "object"
     if "properties" not in parameters:
@@ -85,7 +113,8 @@ class GeminiAdapter:
 
         self.api_key = api_key or settings.gemini_api_key
         self.model = model or settings.gemini_model
-        self.timeout = timeout if timeout is not None else settings.openai_timeout_seconds
+        gemini_timeout = getattr(settings, "gemini_timeout_seconds", settings.openai_timeout_seconds)
+        self.timeout = timeout if timeout is not None else gemini_timeout
         self.max_tool_iterations = (
             max_tool_iterations if max_tool_iterations is not None else settings.max_tool_rounds
         )
@@ -93,7 +122,9 @@ class GeminiAdapter:
         if client is not None:
             self._client = client
         elif self.api_key and self.api_key.strip():
-            http_options = {"timeout": self.timeout} if self.timeout else None
+            # Note: google-genai SDK expects timeout in milliseconds in http_options
+            timeout_ms = int(self.timeout * 1000) if self.timeout else None
+            http_options = {"timeout": timeout_ms} if timeout_ms else None
             self._client = genai.Client(api_key=self.api_key, http_options=http_options)
         else:
             self._client = None

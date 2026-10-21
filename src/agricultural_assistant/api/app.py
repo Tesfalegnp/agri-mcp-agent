@@ -101,6 +101,10 @@ def create_app(
     return app
 
 
+# Default app instance for standard ASGI servers
+app = create_app()
+
+
 def main() -> None:
     """Run the API server with Uvicorn."""
     import uvicorn

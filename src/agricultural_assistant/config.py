@@ -46,8 +46,12 @@ class Settings(BaseModel):
         description="API key for Google Gemini GenAI requests.",
     )
     gemini_model: str = Field(
-        default="gemini-2.5-flash",
+        default="gemini-3.5-flash",
         description="Default model name for Gemini tool-calling.",
+    )
+    gemini_timeout_seconds: float = Field(
+        default=30.0,
+        description="Timeout for Gemini API requests in seconds.",
     )
     # Backend Web Server Configuration (Phase 7)
     backend_host: str = Field(

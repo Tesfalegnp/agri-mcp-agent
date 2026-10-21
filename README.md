@@ -25,7 +25,7 @@ The Model Context Protocol (MCP) provides an open, standardized contract decoupl
 
 ## B. Feature List
 
-- **Gemini-Powered Agricultural Assistant:** Multi-turn conversational guidance powered by Google Gemini (`gemini-2.5-flash`) via the official Google GenAI SDK (`google-genai`).
+- **Gemini-Powered Agricultural Assistant:** Multi-turn conversational guidance powered by Google Gemini (`gemini-3.5-flash` / `gemini-3.8-flash`) via the official Google GenAI SDK (`google-genai`).
 - **Autonomous MCP Tool Calling:** The AI assistant dynamically discovers available MCP tools, executes requested functions through the MCP client, and synthesizes evidence-grounded answers with research citations.
 - **Dual MCP Transports:**
   - **Local stdio Transport:** Standard input/output JSON-RPC for local clients and background CLI operations.
@@ -182,7 +182,7 @@ cp .env.example .env
 | Variable | Required | Default Value | Purpose |
 | :--- | :---: | :--- | :--- |
 | `GEMINI_API_KEY` | Optional | `None` | Google Gemini API key from Google AI Studio. |
-| `GEMINI_MODEL` | Optional | `gemini-2.5-flash` | Gemini model name on the free tier. |
+| `GEMINI_MODEL` | Optional | `gemini-3.5-flash` | Gemini model name on the free tier (`gemini-3.5-flash` or `gemini-3.8-flash`). |
 | `BACKEND_HOST` | Optional | `127.0.0.1` | Host address for the FastAPI backend server. |
 | `BACKEND_PORT` | Optional | `8000` | Port for the FastAPI backend server. |
 | `CORS_ORIGINS` | Optional | `http://localhost:5173,http://127.0.0.1:5173` | Allowed frontend origins for CORS. |
