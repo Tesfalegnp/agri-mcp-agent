@@ -64,6 +64,10 @@ The application follows a modular architecture that separates the user interface
 1. **Frontend — React, TypeScript, and Vite:**  
    The frontend provides the user-facing interface. It includes sections for the dashboard, AI chat, weather, plant disease information, and farm observations. Users can interact with the assistant and view information returned by the backend.
 
+   <p align="center">
+     <img src="assets/UI_dashboard.png" alt="Agricultural Assistant Web Dashboard" width="850" />
+   </p>
+
 2. **Backend — Python:**  
    The backend coordinates application logic, database operations, external service integration, and communication between the AI model and the MCP tools.
 
@@ -125,6 +129,10 @@ The implementation also includes schema-cleaning logic to make tool definitions 
 ### 3.6 Web Interface and Safety
 The web interface organizes the application's main capabilities into dashboard, chat, weather, pathology, and observation sections.
 
+<p align="center">
+  <img src="assets/UI_Users_Chat_Interface.png" alt="AI Agricultural Assistant Chat Interface" width="850" />
+</p>
+
 For operations that write data, the application includes an explicit confirmation step. This provides an additional safeguard against unintended changes to stored farm information.
 
 ---
@@ -143,6 +151,18 @@ For operations that write data, the application includes an explicit confirmatio
 | **Backend testing** | pytest | Automated backend tests |
 | **Frontend testing** | Frontend test suite (Vitest) | Automated frontend checks |
 | **MCP validation** | MCP Inspector | Tool, resource, prompt, and transport checks |
+
+### Dual Transport Validation (MCP Inspector)
+
+Both stdio and Streamable HTTP transports have been validated using the official MCP Inspector:
+
+<p align="center">
+  <img src="assets/Mcp-Inspector_stdio.png" alt="MCP Inspector stdio Transport" width="850" />
+</p>
+
+<p align="center">
+  <img src="assets/Mcp-inspector_streamable.png" alt="MCP Inspector Streamable HTTP Transport" width="850" />
+</p>
 
 ---
 

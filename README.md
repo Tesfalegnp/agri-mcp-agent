@@ -44,7 +44,39 @@ The Model Context Protocol (MCP) provides an open, standardized contract decoupl
 
 ---
 
-## B. Feature List
+## B. Visual Tour & Application Screenshots
+
+### 1. Web Application Dashboard
+The unified dashboard provides full visibility into system integration health (FastAPI backend, Gemini AI, MCP Client/Server, and SQLite), quick-action shortcuts for farmers, and feature overview cards.
+
+<p align="center">
+  <img src="docs/assets/UI_dashboard.png" alt="Agricultural Assistant Web Dashboard" width="900" />
+</p>
+
+### 2. Conversational AI Agricultural Assistant
+Farmers and extension workers interact with vetted agricultural knowledge, weather forecasts, and field observations through natural-language dialogue powered by Google Gemini dynamic tool calling over MCP.
+
+<p align="center">
+  <img src="docs/assets/UI_Users_Chat_Interface.png" alt="AI Agricultural Assistant Chat Interface" width="900" />
+</p>
+
+### 3. MCP Inspector Validation — Local stdio Transport
+The official MCP Inspector discovering and executing tools directly over the local standard I/O transport (`uv run python -m agricultural_assistant.server.app --transport stdio`).
+
+<p align="center">
+  <img src="docs/assets/Mcp-Inspector_stdio.png" alt="MCP Inspector stdio Transport" width="900" />
+</p>
+
+### 4. MCP Inspector Validation — Remote Streamable HTTP Transport
+Active MCP session established over the standard Streamable HTTP endpoint (`http://127.0.0.1:8000/mcp`), validating remote client/server discovery and tool execution.
+
+<p align="center">
+  <img src="docs/assets/Mcp-inspector_streamable.png" alt="MCP Inspector Streamable HTTP Transport" width="900" />
+</p>
+
+---
+
+## C. Feature List
 
 - **Gemini-Powered Agricultural Assistant:** Multi-turn conversational guidance powered by Google Gemini (`gemini-3.5-flash` / `gemini-3.8-flash`) via the official Google GenAI SDK (`google-genai`). Features automatic OpenAPI schema-cleaning logic (`anyOf` flattening and `additionalProperties` pruning) to ensure robust Gemini tool compatibility.
 - **Autonomous MCP Tool Calling:** The AI assistant dynamically discovers available MCP tools, executes requested functions through the MCP client, and synthesizes evidence-grounded answers with research citations.
@@ -301,6 +333,15 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
+#### Validate stdio with MCP Inspector
+```bash
+npx @modelcontextprotocol/inspector uv run python -m agricultural_assistant.server.app --transport stdio
+```
+
+<p align="center">
+  <img src="docs/assets/Mcp-Inspector_stdio.png" alt="MCP Inspector stdio Transport" width="850" />
+</p>
+
 ### 2. Streamable HTTP Transport
 
 #### Built-in with Web Backend
@@ -311,6 +352,16 @@ The Streamable HTTP transport is automatically mounted on the web backend at:
 ```bash
 uv run python -m agricultural_assistant.server.app --transport streamable-http --port 8001 --path /mcp
 ```
+
+#### Validate Streamable HTTP with MCP Inspector
+Start the backend server on port 8000, then in a second terminal run:
+```bash
+npx @modelcontextprotocol/inspector --transport http --server-url http://127.0.0.1:8000/mcp
+```
+
+<p align="center">
+  <img src="docs/assets/Mcp-inspector_streamable.png" alt="MCP Inspector Streamable HTTP Transport" width="850" />
+</p>
 
 #### Test Streamable HTTP with Python Client
 ```python
@@ -481,6 +532,7 @@ agricultural-mcp-assistant/
 ├── README.md                         # Project documentation
 ├── SUMMARY.md                        # Architecture summary & two-tool demo reproducibility
 ├── docs/
+│   ├── assets/                       # Visual demo GIF & UI/Inspector screenshot captures
 │   └── project-report.md             # Project evaluation report & architecture overview
 ├── src/
 │   └── agricultural_assistant/
