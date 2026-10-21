@@ -1,5 +1,9 @@
 # Agricultural MCP Assistant
 
+<p align="center">
+  <img src="docs/assets/mcp-main.gif" alt="Model Context Protocol (MCP) Architecture Overview" width="750" />
+</p>
+
 A production-grade, full-stack, AI-powered agricultural decision-support system designed for smallholder farmers, agricultural extension workers, and agronomists. It integrates crop disease pathology search, localized meteorological forecasts, persistent farm observation management, historical trend summaries, and deterministic agronomic calculations using Google Gemini tool calling and the Model Context Protocol (MCP) over both **stdio and Streamable HTTP transports**.
 
 ---
