@@ -17,7 +17,6 @@ The primary goal is to demonstrate how an AI assistant can interact with externa
 > 📄 **Companion Documents & Reports:**
 > - [Project Evaluation Report (`docs/project-report.md`)](docs/project-report.md) — Complete overview report based on project specifications.
 > - [Architecture & Implementation Summary (`SUMMARY.md`)](SUMMARY.md) — Technical deep-dive and two-tool demo reproducibility.
-> - [Requirement Completion Matrix (`docs/phase-completion-matrix.md`)](docs/phase-completion-matrix.md) — Verification tracking across Phases 1–8.
 > - [Google Docs Reference](https://docs.google.com/document/d/1FmpE9E8Iiw8ysO2DdyMx9ADGxAJ6nblnFDpz-wEz1ws/edit?usp=sharing)
 
 ### Main Objectives
@@ -482,8 +481,7 @@ agricultural-mcp-assistant/
 ├── README.md                         # Project documentation
 ├── SUMMARY.md                        # Architecture summary & two-tool demo reproducibility
 ├── docs/
-│   ├── project-report.md             # Project evaluation report & architecture overview
-│   └── phase-completion-matrix.md   # Requirement completion tracking across all phases
+│   └── project-report.md             # Project evaluation report & architecture overview
 ├── src/
 │   └── agricultural_assistant/
 │       ├── api/
