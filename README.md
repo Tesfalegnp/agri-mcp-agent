@@ -10,7 +10,25 @@ A production-grade, full-stack, AI-powered agricultural decision-support system 
 
 ## A. Project Overview
 
-The **Agricultural MCP Assistant** bridges modern foundation AI models with local agricultural realities. Smallholder farming communities face significant barriers in accessing timely, localized, and evidence-grounded agronomic expertise. Symptoms of devastating crop diseases (such as Coffee Leaf Rust, Maize Fall Armyworm, or Wheat Stem Rust) are often identified too late, and localized weather volatility complicates planting and spraying schedules.
+The **Agricultural MCP Assistant** is an AI-powered application designed to support agricultural information retrieval and farm-observation management through the **Model Context Protocol (MCP)**. It bridges modern foundation AI models with local agricultural realities for smallholder farmers, agricultural extension workers, and agronomists in Eastern Africa (with regional focus on Ethiopia).
+
+The primary goal is to demonstrate how an AI assistant can interact with external tools and structured data sources instead of relying only on its built-in language capabilities. By connecting an AI model (Google Gemini) to an MCP server, the application can retrieve relevant agricultural knowledge, access live weather forecasts, perform supported agronomic calculations, manage persistent farm observation records, and present everything through an intuitive web interface.
+
+> 📄 **Companion Documents & Reports:**
+> - [Project Evaluation Report (`docs/project-report.md`)](docs/project-report.md) — Complete overview report based on project specifications.
+> - [Architecture & Implementation Summary (`SUMMARY.md`)](SUMMARY.md) — Technical deep-dive and two-tool demo reproducibility.
+> - [Requirement Completion Matrix (`docs/phase-completion-matrix.md`)](docs/phase-completion-matrix.md) — Verification tracking across Phases 1–8.
+> - [Google Docs Reference](https://docs.google.com/document/d/1FmpE9E8Iiw8ysO2DdyMx9ADGxAJ6nblnFDpz-wEz1ws/edit?usp=sharing)
+
+### Main Objectives
+* **Develop a custom MCP server** with agricultural tools.
+* **Support both local standard-input/output (stdio) and remote Streamable HTTP transports.**
+* **Integrate an AI model** that can select and call available tools.
+* **Provide agricultural knowledge search** and weather information.
+* **Store and retrieve farm observations** using a database.
+* **Present the main features** through a web interface.
+* **Implement basic safeguards** for operations that modify stored information.
+* **Provide documentation and automated tests** to support evaluation and future development.
 
 ### Problems Addressed
 1. **Access to Vetted Agricultural Knowledge:** Provides instant access to pathology data sourced directly from the **Ethiopian Institute of Agricultural Research (EIAR)** and **CABI PlantwisePlus Knowledge Bank**, avoiding unverified hallucinated treatments.
@@ -29,7 +47,7 @@ The Model Context Protocol (MCP) provides an open, standardized contract decoupl
 
 ## B. Feature List
 
-- **Gemini-Powered Agricultural Assistant:** Multi-turn conversational guidance powered by Google Gemini (`gemini-3.5-flash` / `gemini-3.8-flash`) via the official Google GenAI SDK (`google-genai`).
+- **Gemini-Powered Agricultural Assistant:** Multi-turn conversational guidance powered by Google Gemini (`gemini-3.5-flash` / `gemini-3.8-flash`) via the official Google GenAI SDK (`google-genai`). Features automatic OpenAPI schema-cleaning logic (`anyOf` flattening and `additionalProperties` pruning) to ensure robust Gemini tool compatibility.
 - **Autonomous MCP Tool Calling:** The AI assistant dynamically discovers available MCP tools, executes requested functions through the MCP client, and synthesizes evidence-grounded answers with research citations.
 - **Dual MCP Transports:**
   - **Local stdio Transport:** Standard input/output JSON-RPC for local clients and background CLI operations.
@@ -37,14 +55,17 @@ The Model Context Protocol (MCP) provides an open, standardized contract decoupl
 - **MCP Prompts & Resources:**
   - Resource: `crops://catalog` (curated catalog of supported crops, scientific classifications, and agroecological zones).
   - Prompt: `agricultural_advisory_prompt` (structured prompt template for agronomic symptom evaluation).
-- **Vetted Crop Disease Search:** Full-text search (SQLite FTS5) across regional pathology databases with symptoms, cultural practices, IPM recommendations, and source attribution.
-- **Localized Weather Forecasts:** 1–14 day forecasts (temperatures, rainfall sum, precipitation probability) with regional Ethiopian presets (Addis Ababa, Jimma, Hawassa, Bahir Dar, Mekelle).
-- **Farm Observations Management:**
-  - Form validation with phenological growth stages.
-  - Mandatory **two-step review and explicit confirmation** modal before database write.
-  - Paginated observation history with crop-based filtering.
-  - Statistical summary distributions by crop and growth stage.
-- **Deterministic Agronomic Calculator:** Mathematical Growing Degree Days (GDD) with customizable base and cutoff temperatures, plus precipitation dry-day threshold analysis.
+- **Vetted Crop Disease Search (`search_crop_disease`):** Full-text search (SQLite FTS5) across regional pathology databases with symptoms, cultural practices, IPM recommendations, and source attribution (EIAR & CABI).
+  > **Agricultural & Diagnostic Disclaimer:** The results depend on the knowledge base available in the application. The assistant is an advisory support tool and should not be treated as a substitute for professional agricultural diagnosis, extension agent verification, or laboratory field inspection.
+- **Localized Weather Forecasts (`get_weather_forecast`):** 1–14 day forecasts (temperatures, rainfall sum, precipitation probability) with regional Ethiopian presets (Addis Ababa, Jimma, Hawassa, Bahir Dar, Mekelle) via Open-Meteo.
+- **Farm Observations Management:** Provides persistent recordkeeping across 5 specialized tools:
+  - `record_farm_observation`: Records validated observation with phenological stage and GPS coordinates (write-gated).
+  - `get_farm_observation`: Retrieves a single observation by ID.
+  - `list_farm_observations`: Lists and filters observations by crop and date with pagination.
+  - `count_farm_observations`: Aggregates observation counts matching query criteria.
+  - `summarize_farm_observations`: Produces statistical distributions by crop and growth stage.
+  - *Demonstrates how an AI application interacts with persistent state across turns instead of treating every conversation as isolated.*
+- **Deterministic Agronomic Calculator (`calculate_agronomic_metrics`):** Mathematical Growing Degree Days (GDD) with customizable base and cutoff temperatures, plus precipitation dry-day threshold analysis. Exposing calculations through a dedicated tool separates deterministic numerical operations from natural-language generation.
 - **Deterministic Offline Fallback:** If internet connectivity is interrupted or Gemini free-tier quota is exhausted, the backend falls back to an offline deterministic intent resolver, allowing full local UI testing and development.
 - **Point-in-Time SQLite Backup & Restore:** Online non-blocking database backup and restore via SQLite's native backup API.
 
@@ -122,7 +143,23 @@ graph TD
 
 ## D. Technology Stack
 
-- **AI Engine:** Google Gemini 2.5 Flash via official `google-genai` SDK (v2.31.0+).
+### Component Overview
+
+| Component | Technology | Purpose |
+| :--- | :--- | :--- |
+| **Frontend** | React, TypeScript, Vite, Tailwind CSS | Responsive user interface, interactive dashboard, and build tooling |
+| **Backend** | Python, FastAPI, Uvicorn, Pydantic | Application logic, service coordination, and REST routing |
+| **AI Model Integration** | Google Gemini, Google Gen AI SDK (`google-genai`) | Autonomous multi-turn reasoning and dynamic tool calling |
+| **Tool Protocol** | Model Context Protocol (MCP) | Standardized tool, resource, and prompt discovery and invocation |
+| **Local Database** | SQLite (WAL mode, parameterized transactions) | Persistent farm-observation storage and transactional integrity |
+| **Search Engine** | SQLite FTS5 | Full-text agricultural knowledge retrieval with BM25 ranking |
+| **Weather Service** | Open-Meteo REST API | External meteorological forecasts without API key friction |
+| **Backend Testing** | pytest, pytest-anyio | Automated backend unit and integration test suite |
+| **Frontend Testing** | Vitest, React Testing Library, JSDOM | Automated frontend and write-confirmation modal checks |
+| **MCP Validation** | MCP Inspector (stdio & Streamable HTTP) | Protocol validation of tools, resources, prompts, and sessions |
+
+### Key Library Versions
+- **AI Engine:** Google Gemini (`gemini-3.5-flash` / `gemini-3.8-flash`) via official `google-genai` SDK (v2.31.0+).
 - **Model Context Protocol:** Official MCP Python SDK (`mcp` v2.3.0) with stdio and Streamable HTTP transports.
 - **Backend Framework:** FastAPI (v0.115.0+), Uvicorn, Starlette, AnyIO, Pydantic (v2.10.0+).
 - **Frontend Stack:** React 18, Vite 6, TypeScript 5.7, Tailwind CSS 3.4, Lucide React icons.
@@ -405,19 +442,33 @@ uv run python -m py_compile src/agricultural_assistant/**/*.py tests/*.py
 
 ---
 
-## M. Limitations and Future Improvements
+## M. Security, Reliability, and Limitations
 
-### Current Verified Capabilities
-- 8 agricultural tools tested and operational across stdio and Streamable HTTP.
-- Offline-safe deterministic fallbacks for Gemini AI interactions.
-- Sourced disease pathology for 5 key crops (Teff, Maize, Coffee, Wheat, Sorghum).
-- Point-in-time online SQLite backup and restore.
+### Security and Reliability Safeguards
+The project implements several security and operational reliability foundations:
+* **Environment-Based Configuration:** All sensitive credentials and endpoints are loaded via environment variables with a masked `Settings.__repr__`.
+* **Zero Secret Leakage:** The `.env` file is excluded from Git version control.
+* **Default Loopback Binding:** The server binds to `127.0.0.1` by default, mitigating unintended network exposure during local development.
+* **Human-in-the-Loop Write Gating:** Explicit confirmation is required before any mutating database tool (`record_farm_observation`) executes.
+* **Database Backup & Restoration:** Online non-blocking SQLite hot backup and point-in-time recovery APIs are integrated and tested.
 
-### Limitations & Next Steps (Phase 8+)
+### Production Readiness Notice
+These measures represent solid engineering foundations, but they do not establish that the application is fully production-ready or independently security-audited. Prior to public production deployment, a comprehensive review should be conducted covering:
+- Authentication & Authorization (e.g., OAuth2 / OIDC multi-tenancy)
+- Network exposure controls and TLS termination
+- Dependency vulnerability auditing
+- Comprehensive input validation and sanitization
+- Centralized structured logging and APM monitoring
+- Automated disaster recovery and backup verification
+
+### Response Quality & External Limitations
+- **Curated Knowledge Coverage:** Agricultural responses depend on the completeness of the curated knowledge base. The assistant is an advisory tool and must not replace professional on-site agronomic diagnosis or laboratory inspection.
+- **External API Availability:** Weather forecasts rely on Open-Meteo, and live AI responses rely on Google Gemini. Network interruptions or quota exhaustion (429/503) trigger deterministic offline fallbacks to preserve application utility.
+
+### Future Improvements & Roadmap
 - **Production Containerization:** Docker and Docker Compose configuration for multi-container deployment.
-- **User Authentication:** Single-user local deployment; multi-tenant OAuth2/OIDC is recommended before public web exposure.
-- **Image-Based Diagnosis:** Current crop disease tool is symptom-text based; computer vision model integration for leaf photos is planned for future phases.
-- **Multilingual UI:** Backend domain models support language codes (`en`, `am`, `om`, `ti`); full localized Amharic and Afaan Oromo UI translations can be added.
+- **Image-Based Pathology Diagnosis:** Computer vision model integration for smartphone leaf photograph diagnosis.
+- **Multilingual UI:** Full localized Amharic (`am`) and Afaan Oromo (`om`) UI translations to complement backend domain model language support.
 
 ---
 
@@ -429,7 +480,9 @@ agricultural-mcp-assistant/
 ├── .gitignore                        # Git exclusion rules (ignores .env, db, dist, node_modules)
 ├── pyproject.toml                    # Python project configuration & dependencies
 ├── README.md                         # Project documentation
+├── SUMMARY.md                        # Architecture summary & two-tool demo reproducibility
 ├── docs/
+│   ├── project-report.md             # Project evaluation report & architecture overview
 │   └── phase-completion-matrix.md   # Requirement completion tracking across all phases
 ├── src/
 │   └── agricultural_assistant/
@@ -456,7 +509,7 @@ agricultural-mcp-assistant/
 │   │   └── test/App.test.tsx         # Vitest integration tests
 │   ├── package.json
 │   └── vite.config.ts
-└── tests/                            # Comprehensive test suite (138 pytest tests)
+└── tests/                            # Comprehensive test suite (139 pytest tests)
     ├── test_api_routes.py
     ├── test_database.py              # Includes online backup/restore test
     ├── test_gemini_adapter.py
@@ -472,7 +525,17 @@ To add a new tool without duplicating logic:
 
 ---
 
-## O. License and Acknowledgments
+## O. Conclusion & Acknowledgments
+
+### Conclusion
+The **Agricultural MCP Assistant** demonstrates the integration of an AI model with specialized agricultural tools through the Model Context Protocol. Its main contribution is the combination of agricultural knowledge retrieval, weather access, persistent farm-observation management, agronomic calculations, and an interactive web interface within a modular, extensible application.
+
+The implementation illustrates how MCP provides a clean, standardized contract between an AI model and external capabilities, while comprehensive automated tests (139 backend + 5 frontend) and thorough documentation support reproducibility, safety, and evaluation.
+
+### Author & Repository
+- **Prepared by:** Tesfalegn Petros
+- **Project Repository:** [https://github.com/Tesfalegnp/agri-mcp-agent](https://github.com/Tesfalegnp/agri-mcp-agent)
+- **Reference Document:** [Agricultural MCP Assistant Google Doc](https://docs.google.com/document/d/1FmpE9E8Iiw8ysO2DdyMx9ADGxAJ6nblnFDpz-wEz1ws/edit?usp=sharing)
 
 ### Data & Research Sources
 - **Ethiopian Institute of Agricultural Research (EIAR):** Crop pathology guidelines, regional agroecological classifications, and cultivar base temperatures.
