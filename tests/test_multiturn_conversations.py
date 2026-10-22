@@ -67,6 +67,19 @@ def mock_mcp_client() -> AsyncMock:
         "diagnostic_disclaimer": "Physical inspection recommended.",
     }
 
+    client.record_farm_observation.return_value = {
+        "status": "success",
+        "observation": {
+            "id": 42,
+            "crop": "Coffee",
+            "notes": "Observed powdery orange rust pustules on lower leaves of Arabica shrubs; ~12% leaf surface affected.",
+            "growth_stage": "flowering",
+            "location_name": "Jimma",
+            "observer_role": "farmer",
+            "observed_at": "2026-10-22T10:00:00Z",
+        },
+    }
+
     return client
 
 
@@ -324,4 +337,116 @@ class TestMultiTurnConversations:
         assert "tool_failed" in event_steps
         # Disease prevention information still delivered
         assert "Coffee Leaf Rust" in turn3["llm_response"]
+
+    @pytest.mark.anyio
+    async def test_crop_disease_missing_crop_clarification_and_resume(self, mock_mcp_client: AsyncMock) -> None:
+        """When user asks about disease symptoms without specifying crop:
+        Turn 1: "I see yellow pustules and spots on my leaves" -> asks for crop with suggested replies
+        Turn 2: "Coffee" -> resumes workflow, executes search_crop_disease, and returns grounded pathology diagnosis
+        """
+        orch = ConversationOrchestrator()
+        conv_id = "test-disease-missing-crop"
+
+        # Turn 1: User describes symptoms with no crop
+        turn1 = await orch.process_user_turn(
+            prompt="I see yellow pustules and powdery spots on my leaves",
+            conversation_id=conv_id,
+            mcp_client=mock_mcp_client,
+        )
+        assert turn1["status"] == "awaiting_user_input"
+        assert turn1["state"] == ConversationState.AWAITING_USER_INPUT.value
+        assert "crop" in turn1["llm_response"].lower()
+        assert "Coffee" in turn1["suggested_replies"]
+        assert "Wheat" in turn1["suggested_replies"]
+
+        # Turn 2: User provides crop
+        turn2 = await orch.process_user_turn(
+            prompt="Coffee",
+            conversation_id=conv_id,
+            mcp_client=mock_mcp_client,
+        )
+        assert turn2["status"] == "success"
+        assert turn2["state"] == ConversationState.COMPLETED.value
+        assert len(turn2["tool_calls_executed"]) >= 1
+        assert turn2["tool_calls_executed"][0]["tool_name"] == "search_crop_disease"
+        assert turn2["tool_calls_executed"][0]["arguments"]["crop_name"] == "Coffee"
+        assert "Coffee Leaf Rust" in turn2["llm_response"]
+
+    @pytest.mark.anyio
+    async def test_weather_missing_location_clarification_and_resume(self, mock_mcp_client: AsyncMock) -> None:
+        """When user asks for weather forecast without specifying location:
+        Turn 1: "What is the 3-day weather forecast?" -> asks for location with suggested replies
+        Turn 2: "Jimma" -> resumes workflow, executes get_weather_forecast, and returns grounded weather outlook
+        """
+        orch = ConversationOrchestrator()
+        conv_id = "test-weather-missing-loc"
+
+        # Turn 1: User asks for weather with no location
+        turn1 = await orch.process_user_turn(
+            prompt="What is the 3-day weather forecast and rain probability?",
+            conversation_id=conv_id,
+            mcp_client=mock_mcp_client,
+        )
+        assert turn1["status"] == "awaiting_user_input"
+        assert turn1["state"] == ConversationState.AWAITING_USER_INPUT.value
+        assert "location" in turn1["llm_response"].lower() or "zone" in turn1["llm_response"].lower()
+        assert "Jimma" in turn1["suggested_replies"]
+
+        # Turn 2: User provides location
+        turn2 = await orch.process_user_turn(
+            prompt="Jimma",
+            conversation_id=conv_id,
+            mcp_client=mock_mcp_client,
+        )
+        assert turn2["status"] == "success"
+        assert turn2["state"] == ConversationState.COMPLETED.value
+        assert len(turn2["tool_calls_executed"]) >= 1
+        assert turn2["tool_calls_executed"][0]["tool_name"] == "get_weather_forecast"
+        assert "Open-Meteo" in turn2["llm_response"] or "Weather Forecast" in turn2["llm_response"]
+
+    @pytest.mark.anyio
+    async def test_record_farm_observation_tool_request_loop(self, mock_mcp_client: AsyncMock) -> None:
+        """Verify the full MCP Tool Request & Action loop:
+        1. User asks: "Record a new farm observation for my crop"
+        2. System selects tool record_farm_observation, detects missing crop & notes, returns tool input request with sample presets
+        3. User provides sample preset or field information: "Sample: Coffee Rust (Jimma)"
+        4. Tool record_farm_observation executes on MCP server, persists into SQLite database
+        5. Grounded confirmation report is delivered with record ID and agronomic advice
+        """
+        orch = ConversationOrchestrator()
+        conv_id = "test-tool-request-loop"
+
+        # Turn 1: User asks to record farm observation
+        turn1 = await orch.process_user_turn(
+            prompt="Record a new farm observation for my crop",
+            conversation_id=conv_id,
+            mcp_client=mock_mcp_client,
+        )
+        assert turn1["status"] == "awaiting_user_input"
+        assert turn1["state"] == ConversationState.AWAITING_USER_INPUT.value
+        assert turn1["response_type"] == "tool_input_request"
+        assert turn1["pending_tool_request"] is not None
+        assert turn1["pending_tool_request"]["tool_name"] == "record_farm_observation"
+        assert len(turn1["pending_tool_request"]["fields"]) >= 4
+        assert len(turn1["pending_tool_request"]["sample_presets"]) >= 3
+
+        # Verify tool_selected and tool_requires_input events were emitted
+        step_names = [e["step"] for e in turn1["activity_events"]]
+        assert "tool_selected" in step_names
+        assert "tool_requires_input" in step_names
+
+        # Turn 2: User submits sample preset / tool information
+        turn2 = await orch.process_user_turn(
+            prompt="Sample: Coffee Rust (Jimma)",
+            conversation_id=conv_id,
+            mcp_client=mock_mcp_client,
+        )
+        assert turn2["status"] == "success"
+        assert turn2["state"] == ConversationState.COMPLETED.value
+        assert len(turn2["tool_calls_executed"]) >= 1
+        assert turn2["tool_calls_executed"][0]["tool_name"] == "record_farm_observation"
+        assert turn2["tool_calls_executed"][0]["arguments"]["crop"] == "Coffee"
+        assert "#42" in turn2["llm_response"] or "Successfully Recorded" in turn2["llm_response"]
+        assert "SQLite" in turn2["llm_response"]
+
 

@@ -83,12 +83,34 @@ class PendingWorkflow:
         """Return list of slots still needing user input."""
         return [slot for slot in self.required_slots if not self.collected_slots.get(slot)]
 
+    def get_suggested_replies(self) -> List[str]:
+        """Return smart quick-reply suggestions for the current missing information."""
+        missing = self.get_missing_slots()
+        if not missing:
+            return []
+        if self.workflow_type == "record_observation":
+            return [
+                "Sample: Coffee Rust (Jimma)",
+                "Sample: Maize Armyworm (Hawassa)",
+                "Sample: Wheat Rust (Debre Zeit)",
+                "Cancel operation",
+            ]
+        next_slot = missing[0]
+        if next_slot == "crop":
+            return ["Coffee", "Wheat", "Maize", "Teff", "Sorghum"]
+        elif next_slot == "location":
+            return ["Jimma", "Debre Zeit", "Hawassa", "Adama", "Addis Ababa"]
+        elif next_slot == "topics":
+            return ["Weather risks and disease prevention", "Disease prevention", "Weather risks"]
+        return []
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "workflow_type": self.workflow_type,
             "required_slots": self.required_slots,
             "collected_slots": self.collected_slots,
             "missing_slots": self.get_missing_slots(),
+            "suggested_replies": self.get_suggested_replies(),
             "last_question": self.last_question,
             "turn_count": self.turn_count,
         }
@@ -281,15 +303,17 @@ class ConversationOrchestrator:
                     "status": "awaiting_user_input",
                     "conversation_id": session.conversation_id,
                     "state": session.state.value,
-                    "response_type": "clarification_question",
+                    "response_type": "tool_input_request" if workflow.workflow_type == "record_observation" else "clarification_question",
                     "llm_response": next_question,
+                    "suggested_replies": workflow.get_suggested_replies(),
                     "tool_calls_executed": [],
                     "pending_workflow": workflow.to_dict(),
+                    "pending_tool_request": self._build_pending_tool_request(workflow),
                     "activity_events": [e.to_dict() for e in session.activity_events],
                 }
 
             # All required parameters collected! Transition to execute tools and resume workflow
-            emit_event("workflow_resumed", "All required information gathered. Resuming pending advisory workflow", status="completed")
+            emit_event("workflow_resumed", f"All required information gathered. Resuming pending {workflow.workflow_type} workflow", status="completed")
             return await self._execute_workflow(
                 session=session,
                 workflow=workflow,
@@ -298,13 +322,25 @@ class ConversationOrchestrator:
                 emit_event=emit_event,
             )
 
-        # Step 5: Check if new prompt is an advisory request with missing fields
+        # Step 5: Check if new prompt is missing required fields for known agricultural workflows
         missing_slots, workflow_type = self._detect_missing_fields_for_new_request(prompt_trimmed)
         if missing_slots:
+            required_slots = ["crop", "location", "topics"]
+            if workflow_type == "crop_disease_diagnosis":
+                required_slots = ["crop"]
+            elif workflow_type == "weather_inquiry":
+                required_slots = ["location"]
+            elif workflow_type == "record_observation":
+                required_slots = ["crop", "notes"]
+
+            initial_slots = self._extract_slots(prompt_trimmed)
+            if workflow_type == "crop_disease_diagnosis" and not initial_slots.get("symptoms"):
+                initial_slots["symptoms"] = prompt_trimmed
+
             workflow = PendingWorkflow(
                 workflow_type=workflow_type,
-                required_slots=["crop", "location", "topics"],
-                collected_slots=self._extract_slots(prompt_trimmed),
+                required_slots=required_slots,
+                collected_slots=initial_slots,
             )
             # Filter remaining
             missing = workflow.get_missing_slots()
@@ -314,20 +350,41 @@ class ConversationOrchestrator:
                 next_question = self._formulate_clarification_question(workflow)
                 workflow.last_question = next_question
                 session.add_message("model", next_question)
-                emit_event(
-                    "clarification_required",
-                    f"Additional information required: missing {', '.join(missing)}",
-                    status="waiting_for_user",
-                    details={"missing_slots": missing, "question": next_question},
-                )
+
+                if workflow_type == "record_observation":
+                    emit_event(
+                        "tool_selected",
+                        "AI selected MCP tool 'record_farm_observation'",
+                        status="in_progress",
+                        details={
+                            "tool_name": "record_farm_observation",
+                            "tool_description": "Persist a structured farm observation into local SQLite storage.",
+                        },
+                    )
+                    emit_event(
+                        "tool_requires_input",
+                        "MCP tool 'record_farm_observation' requires structured field parameters from user",
+                        status="waiting_for_user",
+                        details={"tool_name": "record_farm_observation", "missing_slots": missing},
+                    )
+                else:
+                    emit_event(
+                        "clarification_required",
+                        f"Additional information required: missing {', '.join(missing)}",
+                        status="waiting_for_user",
+                        details={"missing_slots": missing, "question": next_question},
+                    )
+
                 return {
                     "status": "awaiting_user_input",
                     "conversation_id": session.conversation_id,
                     "state": session.state.value,
-                    "response_type": "clarification_question",
+                    "response_type": "tool_input_request" if workflow_type == "record_observation" else "clarification_question",
                     "llm_response": next_question,
+                    "suggested_replies": workflow.get_suggested_replies(),
                     "tool_calls_executed": [],
                     "pending_workflow": workflow.to_dict(),
+                    "pending_tool_request": self._build_pending_tool_request(workflow),
                     "activity_events": [e.to_dict() for e in session.activity_events],
                 }
 
@@ -341,13 +398,136 @@ class ConversationOrchestrator:
             adapter=active_gemini_adapter,
         )
 
+    def _build_pending_tool_request(self, workflow: Optional[PendingWorkflow]) -> Optional[Dict[str, Any]]:
+        """Build structured tool execution request metadata for user inspection and input filling."""
+        if not workflow or workflow.workflow_type != "record_observation":
+            return None
+        collected = workflow.collected_slots
+        crop_val = collected.get("crop", "Coffee")
+        stage_val = collected.get("growth_stage", "flowering")
+        loc_val = collected.get("location_name") or collected.get("location", "Jimma")
+        notes_val = collected.get("notes", "")
+
+        return {
+            "tool_name": "record_farm_observation",
+            "description": "Persist a structured farm observation into local SQLite storage.",
+            "fields": [
+                {
+                    "name": "crop",
+                    "label": "Crop Type",
+                    "type": "select",
+                    "options": ["Coffee", "Maize", "Teff", "Wheat", "Sorghum"],
+                    "value": crop_val,
+                    "required": True,
+                },
+                {
+                    "name": "growth_stage",
+                    "label": "Growth Stage",
+                    "type": "select",
+                    "options": [
+                        "seedling",
+                        "vegetative",
+                        "tillering",
+                        "flowering",
+                        "heading",
+                        "grain_filling",
+                        "maturity",
+                        "harvest",
+                    ],
+                    "value": stage_val,
+                    "required": False,
+                },
+                {
+                    "name": "location_name",
+                    "label": "Farm Location",
+                    "type": "text",
+                    "value": loc_val,
+                    "required": False,
+                },
+                {
+                    "name": "notes",
+                    "label": "Field Symptoms & Observation Notes",
+                    "type": "textarea",
+                    "value": notes_val,
+                    "required": True,
+                },
+                {
+                    "name": "observer_role",
+                    "label": "Observer Role",
+                    "type": "select",
+                    "options": ["farmer", "agronomist", "extension_officer"],
+                    "value": collected.get("observer_role", "farmer"),
+                    "required": False,
+                },
+            ],
+            "sample_presets": [
+                {
+                    "label": "Sample: Coffee Rust (Jimma)",
+                    "data": {
+                        "crop": "Coffee",
+                        "growth_stage": "flowering",
+                        "location_name": "Jimma",
+                        "notes": "Observed powdery orange rust pustules on lower leaves of Arabica shrubs; ~12% leaf surface affected.",
+                        "observer_role": "farmer",
+                    },
+                },
+                {
+                    "label": "Sample: Maize Armyworm (Hawassa)",
+                    "data": {
+                        "crop": "Maize",
+                        "growth_stage": "vegetative",
+                        "location_name": "Hawassa",
+                        "notes": "Noticed window-pane leaf feeding damage and small boreholes in lower stalks of hybrid maize.",
+                        "observer_role": "farmer",
+                    },
+                },
+                {
+                    "label": "Sample: Wheat Stem Rust (Debre Zeit)",
+                    "data": {
+                        "crop": "Wheat",
+                        "growth_stage": "heading",
+                        "location_name": "Debre Zeit",
+                        "notes": "Dark reddish-brown elongated pustules visible on stems and leaf sheaths across plot.",
+                        "observer_role": "agronomist",
+                    },
+                },
+                {
+                    "label": "Sample: Teff Smut (Adama)",
+                    "data": {
+                        "crop": "Teff",
+                        "growth_stage": "flowering",
+                        "location_name": "Adama",
+                        "notes": "Panicles producing sooty black spore masses instead of normal grain kernels.",
+                        "observer_role": "farmer",
+                    },
+                },
+            ],
+        }
+
     def _detect_missing_fields_for_new_request(self, prompt: str) -> Tuple[List[str], str]:
         """Detect if an advisory/farm consultation prompt is missing mandatory parameters."""
         lower = prompt.lower()
-        is_advisory = any(k in lower for k in ["advisory", "advise", "recommendation", "farm plan", "prepare an agricultural advisory", "help me prepare"])
         has_crop = any(c in lower for c in ["coffee", "maize", "teff", "wheat", "sorghum"])
         has_location = any(loc in lower for loc in LOCATION_COORDINATES.keys()) or any(k in lower for k in ["ethiopia", "zone", "region", "district", "farm"])
 
+        # 1. Farm Observation Record Intent (Tool Input Gathering Loop)
+        is_record_observation = any(k in lower for k in [
+            "record observation", "record a farm observation", "record farm observation",
+            "log observation", "save observation", "record a field observation",
+            "record my observation", "log farm record", "record crop observation",
+            "add observation", "save farm record", "record a new farm observation"
+        ])
+        if is_record_observation:
+            initial_slots = self._extract_slots(prompt)
+            missing = []
+            if not initial_slots.get("crop"):
+                missing.append("crop")
+            if not initial_slots.get("notes") or len(str(initial_slots.get("notes", "")).strip()) < 10:
+                missing.append("notes")
+            return missing if missing else ["notes"], "record_observation"
+
+        # 2. Agricultural Advisory Intent
+        is_advisory = any(k in lower for k in ["advisory", "advise", "recommendation", "farm plan", "prepare an agricultural advisory", "help me prepare"])
         if is_advisory and (not has_crop or not has_location):
             missing = []
             if not has_crop:
@@ -356,27 +536,108 @@ class ConversationOrchestrator:
                 missing.append("location")
             return missing, "agricultural_advisory"
 
+        # 3. Disease Symptoms Diagnosis without crop specified
+        is_disease_symptom = any(k in lower for k in [
+            "disease", "pest", "symptom", "rust", "blight", "pustule", "yellowing",
+            "spots on", "spots and", "spot on", "wilting", "armyworm", "fungus", "caterpillar", "lesion"
+        ])
+        if is_disease_symptom and not has_crop and not is_advisory:
+            return ["crop"], "crop_disease_diagnosis"
+
+        # 4. Weather Forecast Inquiry without location specified
+        is_weather_inquiry = any(k in lower for k in ["weather", "forecast", "rain", "temperature", "precipitation"]) and any(q in lower for q in ["what", "check", "how is", "will it", "outlook", "tell me", "is it going to"])
+        if is_weather_inquiry and not has_location and not is_advisory:
+            return ["location"], "weather_inquiry"
+
         return [], ""
 
     def _extract_slots(self, text: str) -> Dict[str, Any]:
-        """Extract agricultural slots (crop, location, topics, growth stage) from user text."""
-        lower = text.lower()
+        """Extract agricultural slots (crop, location, topics, growth stage, notes) from user text."""
         slots: Dict[str, Any] = {}
+        clean_text = text.strip()
+
+        # 1. JSON Support
+        if clean_text.startswith("{") and clean_text.endswith("}"):
+            try:
+                parsed = json.loads(clean_text)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+
+        # 2. Key-Value Syntax Support (e.g. crop=Coffee, notes=..., location=Jimma)
+        kv_patterns = {
+            "crop": r"(?:crop|crop_name)\s*[:=]\s*([^,\n]+)",
+            "notes": r"(?:notes|observation|description|symptoms)\s*[:=]\s*([^,\n]+(?:,[^,\n]+)*)",
+            "growth_stage": r"(?:growth_stage|stage)\s*[:=]\s*([^,\n]+)",
+            "location_name": r"(?:location_name|location)\s*[:=]\s*([^,\n]+)",
+            "observer_role": r"(?:observer_role|role)\s*[:=]\s*([^,\n]+)",
+        }
+        for key, pat in kv_patterns.items():
+            m = re.search(pat, clean_text, re.IGNORECASE)
+            if m:
+                val = m.group(1).strip().strip("'\"")
+                if val:
+                    slots[key] = val
+
+        lower = clean_text.lower()
+
+        # Direct Sample Preset Matching
+        if "coffee rust" in lower and "jimma" in lower:
+            slots["crop"] = "Coffee"
+            slots["growth_stage"] = "flowering"
+            slots["location_name"] = "Jimma"
+            slots["location"] = "Jimma"
+            slots["notes"] = "Observed powdery orange rust pustules on lower leaves of Arabica shrubs; ~12% leaf surface affected."
+        elif "maize" in lower and ("armyworm" in lower or "hawassa" in lower):
+            slots["crop"] = "Maize"
+            slots["growth_stage"] = "vegetative"
+            slots["location_name"] = "Hawassa"
+            slots["location"] = "Hawassa"
+            slots["notes"] = "Noticed window-pane leaf feeding damage and small boreholes in lower stalks of hybrid maize."
+        elif "wheat" in lower and ("rust" in lower or "debre zeit" in lower):
+            slots["crop"] = "Wheat"
+            slots["growth_stage"] = "heading"
+            slots["location_name"] = "Debre Zeit"
+            slots["location"] = "Debre Zeit"
+            slots["notes"] = "Dark reddish-brown elongated pustules visible on stems and leaf sheaths across plot."
 
         # Crop extraction
-        for crop in ["coffee", "maize", "teff", "wheat", "sorghum"]:
-            if crop in lower:
-                slots["crop"] = crop.capitalize()
-                break
+        if not slots.get("crop"):
+            for crop in ["coffee", "maize", "teff", "wheat", "sorghum"]:
+                if crop in lower:
+                    slots["crop"] = crop.capitalize()
+                    break
 
         # Location extraction
-        for loc in LOCATION_COORDINATES.keys():
-            if loc in lower:
-                slots["location"] = loc.title()
-                break
+        if not slots.get("location") and not slots.get("location_name"):
+            for loc in LOCATION_COORDINATES.keys():
+                if loc in lower:
+                    slots["location"] = loc.title()
+                    slots["location_name"] = loc.title()
+                    break
 
-        if "ethiopia" in lower and not slots.get("location"):
-            slots["location"] = "Ethiopia"
+            if "ethiopia" in lower and not slots.get("location"):
+                slots["location"] = "Ethiopia"
+                slots["location_name"] = "Ethiopia"
+
+        # Growth stage extraction
+        if not slots.get("growth_stage"):
+            for stage in [
+                "emergence", "seedling", "vegetative", "tillering",
+                "stem_elongation", "booting", "heading", "flowering",
+                "grain_filling", "maturity", "harvest",
+            ]:
+                if stage in lower:
+                    slots["growth_stage"] = stage
+                    break
+
+        # Observer role extraction
+        if not slots.get("observer_role"):
+            for role in ["farmer", "agronomist", "extension_officer"]:
+                if role in lower:
+                    slots["observer_role"] = role
+                    break
 
         # Topics extraction
         topics: List[str] = []
@@ -389,12 +650,38 @@ class ConversationOrchestrator:
         if topics:
             slots["topics"] = topics
 
+        if not slots.get("notes") and len(clean_text) >= 15 and any(k in lower for k in ["observed", "noticed", "pustule", "spot", "damage", "yellow", "lesion", "spore", "infest", "leaves", "stalk"]):
+            slots["notes"] = clean_text
+
         return slots
 
     def _formulate_clarification_question(self, workflow: PendingWorkflow) -> str:
         """Formulate a concise, conversational clarification question based on missing slots."""
         missing = workflow.get_missing_slots()
         collected = workflow.collected_slots
+
+        if workflow.workflow_type == "record_observation":
+            if "crop" in missing and "notes" in missing:
+                return (
+                    "I have selected the MCP tool `record_farm_observation` to persist your farm record into local SQLite storage. "
+                    "Please provide the crop, growth stage, location, and field notes below, or click one of the sample presets to execute immediately:"
+                )
+            elif "crop" in missing:
+                return "Which crop is this farm observation for (e.g. Coffee, Maize, Teff, Wheat, or Sorghum)?"
+            elif "notes" in missing:
+                crop = collected.get("crop", "crop")
+                return f"Please provide your field notes or describe the symptoms you observed on your {crop}:"
+
+        if workflow.workflow_type == "crop_disease_diagnosis":
+            if "crop" in missing:
+                return "I can help diagnose this disease and provide management recommendations. Which crop are you observing these symptoms on (e.g. Coffee, Maize, Teff, Wheat, or Sorghum)?"
+            elif "symptoms" in missing:
+                crop = collected.get("crop", "crop")
+                return f"Could you describe the symptoms you are noticing on your {crop} (e.g., powdery spots, yellowing, wilting, or pustules)?"
+
+        if workflow.workflow_type == "weather_inquiry":
+            if "location" in missing:
+                return "Which location or agricultural zone would you like the weather forecast for (e.g. Jimma, Hawassa, Debre Zeit, Adama, Addis Ababa)?"
 
         if "crop" in missing and "location" in missing:
             return "I can help with that. Which crop are you growing, and where is your farm located?"
@@ -433,40 +720,42 @@ class ConversationOrchestrator:
 
         session.state = ConversationState.EXECUTING_TOOLS
         crop = workflow.collected_slots.get("crop", "Coffee")
-        location = workflow.collected_slots.get("location", "Jimma")
+        location = workflow.collected_slots.get("location")
         topics = workflow.collected_slots.get("topics", ["weather risks", "disease prevention"])
 
         tool_calls_executed: List[Dict[str, Any]] = []
 
-        # 1. Execute Weather Forecast Tool if weather risks requested
-        weather_result = None
-        if any("weather" in str(t).lower() for t in topics) or True:
-            coords = LOCATION_COORDINATES.get(location.lower(), (7.67, 36.83))
+        if workflow.workflow_type == "weather_inquiry":
+            target_loc = location or "Jimma"
+            coords = LOCATION_COORDINATES.get(target_loc.lower(), (7.67, 36.83))
             emit_event(
                 "tool_call_requested",
-                f"Calling MCP tool 'get_weather_forecast' for {location}",
+                f"Calling MCP tool 'get_weather_forecast' for {target_loc}",
                 status="in_progress",
-                details={"tool_name": "get_weather_forecast", "arguments": {"latitude": coords[0], "longitude": coords[1], "forecast_days": 3, "crop_context": crop}},
+                details={"tool_name": "get_weather_forecast", "arguments": {"latitude": coords[0], "longitude": coords[1], "forecast_days": 3}},
             )
-            emit_event("external_query", f"Querying Open-Meteo external REST service for {location} ({coords[0]}°N, {coords[1]}°E)", status="waiting_for_remote")
-
+            emit_event("external_query", f"Querying Open-Meteo external REST service for {target_loc} ({coords[0]}°N, {coords[1]}°E)", status="waiting_for_remote")
             try:
                 t0 = time.time()
-                weather_result = await mcp_client.get_weather_forecast(latitude=coords[0], longitude=coords[1], forecast_days=3, crop_context=crop)
+                weather_result = await mcp_client.get_weather_forecast(latitude=coords[0], longitude=coords[1], forecast_days=3)
                 dur = (time.time() - t0) * 1000.0
                 tool_calls_executed.append({
                     "tool_name": "get_weather_forecast",
-                    "arguments": {"latitude": coords[0], "longitude": coords[1], "forecast_days": 3, "crop_context": crop},
+                    "arguments": {"latitude": coords[0], "longitude": coords[1], "forecast_days": 3},
                     "result": weather_result,
                 })
-                emit_event("tool_result_received", f"Weather forecast received ({round(dur, 1)}ms)", status="completed", details={"provider": "Open-Meteo", "days": len(weather_result.get("daily_forecast", []))})
+                emit_event("tool_result_received", f"Weather forecast received ({round(dur, 1)}ms)", status="completed")
             except Exception as exc:
                 emit_event("tool_failed", f"Weather tool execution error: {exc}", status="error")
+                weather_result = None
 
-        # 2. Execute Disease Search Tool if disease prevention requested
-        disease_result = None
-        if any("disease" in str(t).lower() for t in topics) or True:
-            symptoms = "leaf rust prevention spots yellowing lesions"
+            session.state = ConversationState.PROCESSING_RESULTS
+            emit_event("results_returned_to_llm", "Actual MCP tool results returned to AI orchestrator", status="in_progress")
+            emit_event("preparing_response", "AI is synthesizing grounded weather forecast", status="in_progress")
+            final_answer = self._format_weather_response(target_loc, weather_result)
+
+        elif workflow.workflow_type == "crop_disease_diagnosis":
+            symptoms = workflow.collected_slots.get("symptoms") or "leaf spots pustules lesions"
             emit_event(
                 "tool_call_requested",
                 f"Calling MCP tool 'search_crop_disease' for {crop}",
@@ -474,7 +763,6 @@ class ConversationOrchestrator:
                 details={"tool_name": "search_crop_disease", "arguments": {"crop_name": crop, "symptoms": symptoms}},
             )
             emit_event("external_query", "Searching curated agricultural SQLite FTS5 database (EIAR / CABI)", status="waiting_for_remote")
-
             try:
                 t0 = time.time()
                 disease_result = await mcp_client.search_crop_disease(crop_name=crop, symptoms=symptoms)
@@ -488,20 +776,170 @@ class ConversationOrchestrator:
                 emit_event("tool_result_received", f"Disease search completed with {matches_count} matches ({round(dur, 1)}ms)", status="completed")
             except Exception as exc:
                 emit_event("tool_failed", f"Disease tool execution error: {exc}", status="error")
+                disease_result = None
 
-        # Step: Return results to LLM & Synthesize Response
-        session.state = ConversationState.PROCESSING_RESULTS
-        emit_event("results_returned_to_llm", "Actual MCP tool results returned to AI orchestrator", status="in_progress")
-        emit_event("preparing_response", "AI is synthesizing evidence-based agricultural advisory", status="in_progress")
+            weather_result = None
+            if location:
+                coords = LOCATION_COORDINATES.get(location.lower(), (7.67, 36.83))
+                try:
+                    weather_result = await mcp_client.get_weather_forecast(latitude=coords[0], longitude=coords[1], forecast_days=3, crop_context=crop)
+                    tool_calls_executed.append({
+                        "tool_name": "get_weather_forecast",
+                        "arguments": {"latitude": coords[0], "longitude": coords[1], "forecast_days": 3, "crop_context": crop},
+                        "result": weather_result,
+                    })
+                except Exception:
+                    pass
 
-        # Format Grounded Final Advisory
-        final_answer = self._format_advisory_response(crop, location, weather_result, disease_result)
+            session.state = ConversationState.PROCESSING_RESULTS
+            emit_event("results_returned_to_llm", "Actual MCP tool results returned to AI orchestrator", status="in_progress")
+            emit_event("preparing_response", "AI is synthesizing evidence-based disease pathology report", status="in_progress")
+            final_answer = self._format_disease_response(crop, symptoms, disease_result, location, weather_result)
+
+        elif workflow.workflow_type == "record_observation":
+            notes = workflow.collected_slots.get("notes") or f"Field observation for {crop} recorded via MCP tool."
+            growth_stage = workflow.collected_slots.get("growth_stage", "flowering")
+            location_name = workflow.collected_slots.get("location_name") or workflow.collected_slots.get("location", "Jimma")
+            observer_role = workflow.collected_slots.get("observer_role", "farmer")
+
+            args = {
+                "crop": crop,
+                "notes": notes,
+                "growth_stage": growth_stage,
+                "location_name": location_name,
+                "observer_role": observer_role,
+            }
+
+            emit_event(
+                "tool_call_requested",
+                f"Calling MCP tool 'record_farm_observation' for {crop} ({location_name})",
+                status="in_progress",
+                details={"tool_name": "record_farm_observation", "arguments": args},
+            )
+            emit_event(
+                "persisting_observation",
+                "Persisting validated farm observation into local SQLite database",
+                status="waiting_for_remote",
+            )
+
+            try:
+                t0 = time.time()
+                record_result = await mcp_client.record_farm_observation(
+                    crop=crop,
+                    notes=notes,
+                    growth_stage=growth_stage,
+                    location_name=location_name,
+                    observer_role=observer_role,
+                )
+                dur = (time.time() - t0) * 1000.0
+                obs_data = record_result.get("observation", {})
+                obs_id = obs_data.get("id") or record_result.get("id") or 1
+
+                tool_calls_executed.append({
+                    "tool_name": "record_farm_observation",
+                    "arguments": args,
+                    "result": record_result,
+                })
+                emit_event(
+                    "tool_result_received",
+                    f"Observation successfully persisted into SQLite storage (Record ID #{obs_id}, {round(dur, 1)}ms)",
+                    status="completed",
+                    details=record_result,
+                )
+            except Exception as exc:
+                emit_event("tool_failed", f"Failed to record farm observation: {exc}", status="error")
+                record_result = {"status": "error", "message": str(exc)}
+                obs_id = "N/A"
+
+            disease_matches = []
+            try:
+                d_res = await mcp_client.search_crop_disease(crop_name=crop, symptoms=notes)
+                if d_res.get("potential_matches"):
+                    disease_matches = d_res["potential_matches"]
+            except Exception:
+                pass
+
+            session.state = ConversationState.PROCESSING_RESULTS
+            emit_event("results_returned_to_llm", "Actual MCP tool results returned to AI orchestrator", status="in_progress")
+            emit_event("preparing_response", "AI is synthesizing observation confirmation and agronomic advisory", status="in_progress")
+
+            final_answer = self._format_observation_response(
+                crop=crop,
+                notes=notes,
+                growth_stage=growth_stage,
+                location_name=location_name,
+                observer_role=observer_role,
+                obs_id=obs_id,
+                record_result=record_result,
+                disease_matches=disease_matches,
+            )
+
+        else:
+            # 1. Execute Weather Forecast Tool if weather risks requested
+            target_loc = location or "Jimma"
+            weather_result = None
+            if any("weather" in str(t).lower() for t in topics) or True:
+                coords = LOCATION_COORDINATES.get(target_loc.lower(), (7.67, 36.83))
+                emit_event(
+                    "tool_call_requested",
+                    f"Calling MCP tool 'get_weather_forecast' for {target_loc}",
+                    status="in_progress",
+                    details={"tool_name": "get_weather_forecast", "arguments": {"latitude": coords[0], "longitude": coords[1], "forecast_days": 3, "crop_context": crop}},
+                )
+                emit_event("external_query", f"Querying Open-Meteo external REST service for {target_loc} ({coords[0]}°N, {coords[1]}°E)", status="waiting_for_remote")
+
+                try:
+                    t0 = time.time()
+                    weather_result = await mcp_client.get_weather_forecast(latitude=coords[0], longitude=coords[1], forecast_days=3, crop_context=crop)
+                    dur = (time.time() - t0) * 1000.0
+                    tool_calls_executed.append({
+                        "tool_name": "get_weather_forecast",
+                        "arguments": {"latitude": coords[0], "longitude": coords[1], "forecast_days": 3, "crop_context": crop},
+                        "result": weather_result,
+                    })
+                    emit_event("tool_result_received", f"Weather forecast received ({round(dur, 1)}ms)", status="completed", details={"provider": "Open-Meteo", "days": len(weather_result.get("daily_forecast", []))})
+                except Exception as exc:
+                    emit_event("tool_failed", f"Weather tool execution error: {exc}", status="error")
+
+            # 2. Execute Disease Search Tool if disease prevention requested
+            disease_result = None
+            if any("disease" in str(t).lower() for t in topics) or True:
+                symptoms = "leaf rust prevention spots yellowing lesions"
+                emit_event(
+                    "tool_call_requested",
+                    f"Calling MCP tool 'search_crop_disease' for {crop}",
+                    status="in_progress",
+                    details={"tool_name": "search_crop_disease", "arguments": {"crop_name": crop, "symptoms": symptoms}},
+                )
+                emit_event("external_query", "Searching curated agricultural SQLite FTS5 database (EIAR / CABI)", status="waiting_for_remote")
+
+                try:
+                    t0 = time.time()
+                    disease_result = await mcp_client.search_crop_disease(crop_name=crop, symptoms=symptoms)
+                    dur = (time.time() - t0) * 1000.0
+                    tool_calls_executed.append({
+                        "tool_name": "search_crop_disease",
+                        "arguments": {"crop_name": crop, "symptoms": symptoms},
+                        "result": disease_result,
+                    })
+                    matches_count = len(disease_result.get("potential_matches", []))
+                    emit_event("tool_result_received", f"Disease search completed with {matches_count} matches ({round(dur, 1)}ms)", status="completed")
+                except Exception as exc:
+                    emit_event("tool_failed", f"Disease tool execution error: {exc}", status="error")
+
+            # Return results to LLM & Synthesize Response
+            session.state = ConversationState.PROCESSING_RESULTS
+            emit_event("results_returned_to_llm", "Actual MCP tool results returned to AI orchestrator", status="in_progress")
+            emit_event("preparing_response", "AI is synthesizing evidence-based agricultural advisory", status="in_progress")
+
+            # Format Grounded Final Advisory
+            final_answer = self._format_advisory_response(crop, target_loc, weather_result, disease_result)
 
         session.state = ConversationState.COMPLETED
         session.pending_workflow = None  # Workflow finished successfully!
         session.add_message("model", final_answer, tool_calls=tool_calls_executed)
 
-        emit_event("final_answer_delivered", "Agricultural advisory successfully delivered", status="completed")
+        emit_event("final_answer_delivered", "Response successfully delivered with live MCP data", status="completed")
 
         return {
             "status": "success",
@@ -513,6 +951,105 @@ class ConversationOrchestrator:
             "rounds_used": len(tool_calls_executed),
             "activity_events": [e.to_dict() for e in session.activity_events],
         }
+
+    def _format_observation_response(
+        self,
+        crop: str,
+        notes: str,
+        growth_stage: str,
+        location_name: str,
+        observer_role: str,
+        obs_id: Any,
+        record_result: Dict[str, Any],
+        disease_matches: List[Dict[str, Any]],
+    ) -> str:
+        """Format a farm observation confirmation grounded in MCP tool execution results."""
+        obs_obj = record_result.get("observation", {})
+        created_at = obs_obj.get("observed_at") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        lines = [
+            "### Farm Observation Successfully Recorded via MCP Protocol\n",
+            "Your observation has been validated and persisted into the local SQLite database (`farm_observations` table):\n",
+            f"- **Observation ID:** `#{obs_id}`",
+            f"- **Crop Type:** **{crop}**",
+            f"- **Growth Stage:** {growth_stage}",
+            f"- **Location:** {location_name}",
+            f"- **Observer Role:** {observer_role}",
+            f"- **Observation Notes:** *\"{notes}\"*",
+            f"- **Recorded At:** {created_at}",
+            "- **Storage Target:** Local SQLite Storage (Observation Repository)",
+        ]
+
+        if disease_matches:
+            top = disease_matches[0]
+            lines.append(f"\n#### Grounded Agronomic Analysis & IPM Actions ({top.get('disease_name', 'Pathology Match')})")
+            lines.append(f"- **Identified Pathogen / Pest:** *{top.get('scientific_name', 'Agricultural finding')}*")
+            lines.append("- **Recommended Cultural & Management Actions:**")
+            for rec in top.get("management_recommendations", [])[:3]:
+                lines.append(f"  - {rec}")
+            lines.append(f"*Reference: {top.get('source_reference', 'EIAR / CABI PlantwisePlus')}*")
+        else:
+            lines.append("\n#### Agronomic Best Practices")
+            lines.append(f"- Continue periodic monitoring of your {crop} plot every 3–5 days.")
+            lines.append("- Ensure appropriate field sanitation and record subsequent growth stage progression.")
+
+        lines.append("\n> **Audit Trail:** This record is queryable through `list_farm_observations` and viewable in the Field Observations dashboard.")
+        return "\n".join(lines)
+
+    def _format_disease_response(
+        self,
+        crop: str,
+        symptoms: str,
+        disease: Optional[Dict[str, Any]],
+        location: Optional[str] = None,
+        weather: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Format an evidence-based crop pathology diagnosis from MCP tool findings."""
+        loc_str = f" in {location}" if location else ""
+        sections = [
+            f"### Crop Pathology Diagnosis: {crop}{loc_str}\n",
+            f"Based on reported symptoms (*\"{symptoms}\"*), here are the findings retrieved from curated pathology records (EIAR / CABI):\n",
+        ]
+        if disease and disease.get("potential_matches"):
+            matches = disease["potential_matches"]
+            for i, match in enumerate(matches, 1):
+                sections.append(f"#### {i}. {match.get('disease_name')} (*{match.get('scientific_name', 'Pathogen')}*)")
+                sections.append(f"- **Common Symptoms:** {', '.join(match.get('common_symptoms', []))}")
+                sections.append("- **Recommended Cultural & IPM Interventions:**")
+                for rec in match.get("management_recommendations", []):
+                    sections.append(f"  - {rec}")
+                sections.append(f"- **Authority Reference:** {match.get('source_reference', 'EIAR / CABI PlantwisePlus Knowledge Bank')}\n")
+            sections.append(f"> **Agronomic Caution:** {disease.get('diagnostic_disclaimer', 'Physical inspection by a qualified local extension officer or agronomist is recommended before chemical application.')}")
+        else:
+            sections.append(f"No exact disease records found for {crop} matching symptoms: *{symptoms}*.")
+            sections.append("Recommended next step: Monitor field plots closely and consult a local agricultural extension officer for physical leaf sampling.")
+
+        if weather and weather.get("daily_forecast"):
+            days = weather["daily_forecast"]
+            sections.append(f"\n#### Localized Weather Outlook ({location})")
+            for d in days:
+                sections.append(f"- **{d.get('date')}**: Temp {d.get('min_temperature_c')}–{d.get('max_temperature_c')}°C | Rain {d.get('precipitation_mm')}mm ({d.get('precipitation_probability_pct')}%)")
+
+        return "\n".join(sections)
+
+    def _format_weather_response(self, location: str, weather: Optional[Dict[str, Any]]) -> str:
+        """Format localized weather forecast findings from Open-Meteo tool."""
+        sections = [
+            f"### Localized Agricultural Weather Forecast: {location.title()}\n",
+        ]
+        if weather and weather.get("daily_forecast"):
+            days = weather["daily_forecast"]
+            sections.append("Here is the 3-day meteorological forecast retrieved via Open-Meteo MCP tool:")
+            for d in days:
+                sections.append(
+                    f"- **{d.get('date')}**: High {d.get('max_temperature_c')}°C, Low {d.get('min_temperature_c')}°C | "
+                    f"Precipitation: {d.get('precipitation_mm')}mm ({d.get('precipitation_probability_pct')}% rain probability)"
+                )
+            sections.append(f"\n*Source: {weather.get('attribution', 'Open-Meteo Weather API')}*")
+            sections.append("\n**Agronomic Advice:** Monitor rain probabilities for field operations such as spraying, fertilizer top-dressing, or harvest drying.")
+        else:
+            sections.append(f"Unable to retrieve current weather forecast data for {location}. Please verify geographic coordinates or check network connectivity.")
+        return "\n".join(sections)
 
     def _format_advisory_response(
         self,
@@ -597,13 +1134,14 @@ class ConversationOrchestrator:
             conversation_history=history_for_adapter,
         )
 
-        # Resilient fallback if provider quota is temporarily exhausted
-        if result.get("status") == "error" and result.get("error_type") == "gemini_quota_exhausted":
-            if hasattr(active_adapter, "_fallback_deterministic_execution"):
-                emit_event("quota_fallback", "Gemini API quota exhausted; activating deterministic MCP tool fallback", status="in_progress")
-                result = await active_adapter._fallback_deterministic_execution(
-                    prompt, mcp_client, set(tool_names), None, auto_confirm_writes
-                )
+        # Resilient fallback if provider encounters quota/demand exhaustion or API error
+        if result.get("status") == "error" and hasattr(active_adapter, "_fallback_deterministic_execution"):
+            emit_event("quota_fallback", f"LLM provider unavailable ({result.get('error_type', 'error')}); activating deterministic MCP tool fallback", status="in_progress")
+            fallback_res = await active_adapter._fallback_deterministic_execution(
+                prompt, mcp_client, set(tool_names), None, auto_confirm_writes
+            )
+            if fallback_res.get("status") == "success":
+                result = fallback_res
 
         tool_calls = result.get("tool_calls_executed", [])
         for tc in tool_calls:

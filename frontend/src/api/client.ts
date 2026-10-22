@@ -34,8 +34,30 @@ export interface PendingWorkflowState {
   required_slots: string[];
   collected_slots: Record<string, any>;
   missing_slots: string[];
+  suggested_replies?: string[];
   last_question?: string;
   turn_count: number;
+}
+
+export interface ToolInputField {
+  name: string;
+  label: string;
+  type: 'text' | 'select' | 'textarea';
+  options?: string[];
+  value?: string;
+  required?: boolean;
+}
+
+export interface ToolSamplePreset {
+  label: string;
+  data: Record<string, any>;
+}
+
+export interface PendingToolRequest {
+  tool_name: string;
+  description: string;
+  fields: ToolInputField[];
+  sample_presets?: ToolSamplePreset[];
 }
 
 export interface ChatMessage {
@@ -50,6 +72,9 @@ export interface ChatMessage {
   }>;
   activityEvents?: ExecutionActivityEvent[];
   state?: string;
+  suggestedReplies?: string[];
+  pendingWorkflow?: PendingWorkflowState;
+  pendingToolRequest?: PendingToolRequest;
 }
 
 export interface ChatResponse {
@@ -67,7 +92,9 @@ export interface ChatResponse {
   rounds_used?: number;
   message?: string;
   error_type?: string;
+  suggested_replies?: string[];
   pending_workflow?: PendingWorkflowState;
+  pending_tool_request?: PendingToolRequest;
   activity_events?: ExecutionActivityEvent[];
 }
 
